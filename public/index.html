@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Nyaa Chat - 실시간 그룹 채널 채팅</title>
+  <meta name="description" content="순수 텍스트 대화, 그룹 채널 및 사용자 정보(/whois) 조회를 지원하는 가볍고 빠른 실시간 웹 채팅 애플리케이션">
+  <link rel="stylesheet" href="/style.css?v=20260924_secpatch1">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <!-- Login / Setup Modal -->
+  <div id="loginModal" class="modal-overlay active">
+    <div class="modal-card">
+      <!-- Light Sky Blue Window Title Bar -->
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-title">Nyaa Chat - 접속 설정</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-min-dummy" tabindex="-1">─</button>
+          <button type="button" class="win-btn win-max-dummy" tabindex="-1">□</button>
+          <button type="button" class="win-btn win-close win-close-dummy" tabindex="-1">✕</button>
+        </div>
+      </div>
+
+      <div class="modal-body-content">
+        <div class="welcome-box">
+          <div class="welcome-title"><strong>Nyaa Chat</strong>에 오신 것을 환영합니다</div>
+          <div class="welcome-sub">실시간 그룹 채널 텍스트 채팅</div>
+        </div>
+
+        <form id="loginForm" class="modal-form" action="javascript:void(0);" onsubmit="event.preventDefault(); return false;">
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label class="form-label" for="nicknameInput">닉네임 입력</label>
+            <div class="input-with-avatar">
+              <span id="selectedAvatar" style="display: none;">👤</span>
+              <input type="text" id="nicknameInput" class="custom-input" placeholder="사용할 닉네임 (예: 앨리스, 밥)" maxlength="16" required autofocus>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label class="form-label" for="nickpassInput">닉네임 비밀번호 <small style="color: var(--text-muted); font-size: 0.8rem;">(선택 - 사칭 방어 보호용)</small></label>
+            <input type="password" id="nickpassInput" class="custom-input" placeholder="등록된 비밀번호 입력 또는 비워둠" maxlength="64">
+          </div>
+
+          <button type="submit" id="startChatBtn" class="primary-btn">
+            <span>채팅 입장</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Window Application Frame -->
+  <div class="window-app-frame" id="windowAppFrame">
+    <!-- Top Light Sky Blue Window Bar -->
+    <header class="window-bar main-window-bar" id="mainWindowBar">
+      <div class="win-title-wrap">
+        <span class="win-title" id="mainWindowTitle">Nyaa Chat - [#자유 대화방]</span>
+      </div>
+      <div class="win-server-status" id="winServerStatus">
+        실시간 연결됨
+      </div>
+      <div class="win-controls">
+        <button type="button" class="win-btn win-theme-btn" id="themeToggleBtn" title="모드 전환 (일반/다크)">🌙</button>
+        <button type="button" class="win-btn" id="winMinBtn" title="최소화">─</button>
+        <button type="button" class="win-btn" id="winMaxBtn" title="전체화면 토글">□</button>
+        <button type="button" class="win-btn win-close" id="winCloseBtn" title="접속 종료">✕</button>
+      </div>
+    </header>
+
+    <!-- Main Chat Application Container -->
+    <div class="app-layout" id="appLayout">
+    <!-- Left Navigation Sidebar (Channels) -->
+    <aside class="sidebar" id="sidebar">
+      <!-- User Profile Header -->
+      <div class="sidebar-header">
+        <div class="user-profile-widget">
+          <span id="myAvatarDisplay" style="display: none;">🧑‍💻</span>
+          <div class="user-meta">
+            <div class="user-name-row">
+              <span class="user-nickname" id="myNicknameDisplay">내 닉네임</span>
+              <span class="user-status-tag">온라인</span>
+            </div>
+            <span class="user-id-sub" id="myIdDisplay">ID: #0000</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="soundToggleBtn" class="icon-btn" title="알림음 토글">
+            <span id="soundIcon">🔔</span>
+          </button>
+          <button type="button" class="sidebar-collapse-icon-btn" id="collapseLeftSidebarBtn" title="채널 창 접기 (Alt+C 또는 F3)">
+            ◀
+          </button>
+        </div>
+      </div>
+
+      <!-- Channels List Section -->
+      <div class="nav-section-container" id="channelsSection">
+        <div class="section-title-bar">
+          <div class="section-title-left">
+            <span class="section-title">참여 채널</span>
+            <span class="channel-count" id="channelCountBadge">1개</span>
+          </div>
+          <div class="section-title-actions" style="display: flex; gap: 4px;">
+            <button type="button" class="btn-create-channel-mini" id="openServerListBtn" title="현재 서버 채널 탐색 (/list)">탐색</button>
+            <button type="button" class="btn-create-channel-mini" id="openCreateChannelBtn" title="새 #채널 개설 또는 입장">+ 개설</button>
+          </div>
+        </div>
+        <div class="channels-list" id="channelsList">
+          <!-- Dynamically populated (Only joined channels) -->
+        </div>
+      </div>
+
+      <!-- 1:1 Direct Messages Section (Separated & Hidden per User Request) -->
+      <div class="nav-section-container" id="dmsSection" style="display: none;">
+        <div class="section-title-bar">
+          <div class="section-title-left">
+            <span class="section-title">1:1 대화</span>
+            <span class="channel-count" id="dmCountBadge">0명</span>
+          </div>
+        </div>
+        <div class="channels-list" id="dmConversationsList">
+          <!-- Separated -->
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Work Area -->
+    <main class="chat-main" id="chatMain">
+      <!-- Chat Room Header -->
+      <header class="chat-header" id="chatHeader">
+        <div class="chat-header-left">
+          <button type="button" class="sidebar-toggle-btn active" id="toggleLeftSidebarBtn" title="채널 창 접기/열기 (Alt+C 또는 F3)">
+            <span class="toggle-icon">◀</span>
+            <span class="toggle-text">채널</span>
+          </button>
+
+          <div class="room-info">
+            <div class="room-icon-badge" id="currentRoomIcon" style="display: none;"></div>
+            <div class="room-meta">
+              <div class="room-title-row">
+                <h2 class="room-title" id="currentRoomTitle">#자유대화</h2>
+                <span class="room-type-tag" id="currentServerBadge" style="cursor: pointer;" title="클릭하면 서버 리스트(/servers · F2) 열기">A서버</span>
+                <span class="room-type-tag" id="currentRoomTypeTag" style="display: none;">채널</span>
+              </div>
+              <div class="room-topic-row">
+                <span class="topic-tag">Topic</span>
+                <span class="room-desc" id="currentRoomDesc">모든 사용자와 자유롭게 대화하는 광장입니다.</span>
+                <button type="button" class="topic-edit-btn" id="editTopicBtn" title="채널 Topic(주제) 및 모드 변경 (/topic · /mode)" style="font-size: 11px; padding: 1px 6px;">설정</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-header-actions">
+          <button type="button" class="icon-btn-text" id="headerServerListBtn" title="네트워크 서버 리스트 열기 (/servers 또는 F2)">
+            <span>서버리스트</span>
+          </button>
+          <button type="button" class="icon-btn-text" id="helpCmdBtn" title="슬래시 명령어 도움말 (/help)">
+            <span>/help</span>
+          </button>
+          <button type="button" class="icon-btn-text" id="exportChatBtn" title="현재 채널 로컬 대화 백업 파일 다운로드 (/export)">
+            <span>로컬 백업</span>
+          </button>
+          <button type="button" class="sidebar-toggle-btn active" id="toggleRightSidebarBtn" title="접속자 목록 접기/열기 (Alt+U 또는 F4)">
+            <span class="toggle-text">접속자</span>
+            <span class="header-count-pill" id="headerUserCount">0</span>
+            <span class="unread-pill" id="totalDmUnread" style="display: none;">0</span>
+          </button>
+          <button class="icon-btn" id="mobileMenuBtn" title="메뉴 열기">
+            <span>☰</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Message History Scroll Area -->
+      <div class="messages-container" id="messagesContainer">
+        <!-- Messages will be dynamically rendered here -->
+      </div>
+
+      <!-- Typing Indicator -->
+      <div class="typing-indicator-bar" id="typingIndicatorBar">
+        <div class="typing-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="typing-text" id="typingText">상대방이 입력하고 있습니다...</span>
+      </div>
+
+      <!-- Server-Specific Extended Command & Module Bar (Active only on target server) -->
+      <div class="server-ext-bar" id="serverExtBar" style="display: none; align-items: center; gap: 6px; padding: 6px 14px; background: rgba(15, 23, 42, 0.85); border-top: 1px solid var(--border-main); overflow-x: auto;">
+        <span style="font-size: 11px; color: #34d399; font-weight: 700; white-space: nowrap;" id="serverExtBarLabel">[서버 확장 명령]:</span>
+        <div id="serverExtBtnsContainer" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;"></div>
+      </div>
+
+      <!-- Message Input Bar Form -->
+      <form class="chat-input-form" id="chatInputForm" action="javascript:void(0);" onsubmit="event.preventDefault(); return false;">
+        <div class="input-wrapper">
+          <textarea id="messageInput" class="chat-textarea" placeholder="메시지 또는 /명령어를 입력하세요... (Enter: 전송, Shift+Enter: 줄바꿈, /help: 명령어)" rows="1" maxlength="2000"></textarea>
+        </div>
+
+        <button type="button" class="send-btn" id="sendBtn" title="메시지 전송">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </form>
+    </main>
+
+    <!-- Right Sidebar: Online Nicklist -->
+    <aside class="right-sidebar" id="rightSidebar">
+      <div class="right-sidebar-header">
+        <div class="section-title-left">
+          <span class="section-title">접속자 목록</span>
+          <span class="channel-count" id="onlineUserCount">0명</span>
+        </div>
+        <button type="button" class="sidebar-collapse-icon-btn" id="collapseRightSidebarBtn" title="접속자 목록 접기 (Alt+U 또는 F4)">
+          ▶
+        </button>
+      </div>
+
+      <div class="right-sidebar-body">
+        <div class="users-list" id="usersList">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <div class="right-sidebar-footer">
+        <span class="footer-tip">사용자 클릭 시 사용자 정보(/whois)</span>
+      </div>
+    </aside>
+    <div class="app-backdrop" id="appBackdrop"></div>
+  </div>
+</div>
+
+  <!-- Channel Creation Modal -->
+  <div class="modal-overlay" id="createChannelModal" style="display: none;">
+    <div class="modal-card">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-title">새 채널 개설 / 입장</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeCreateChannelBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content">
+        <p class="modal-intro" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px;">새로운 <code>#채널명</code>을 입력하여 방을 개설하거나 이미 개설된 채널에 입장하세요.</p>
+        <form id="createChannelForm" class="modal-form" action="javascript:void(0);" onsubmit="event.preventDefault(); return false;">
+          <div class="form-group">
+            <label class="form-label" for="newChannelNameInput">채널 이름</label>
+            <input type="text" id="newChannelNameInput" class="custom-input" placeholder="#채널명 (예: #개발, #취미)" required maxlength="25">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="newChannelTopicInput">채널 토픽 (주제 및 소개)</label>
+            <input type="text" id="newChannelTopicInput" class="custom-input" placeholder="채널 주제를 간략히 입력하세요 (선택)" maxlength="80">
+          </div>
+          <div class="form-group">
+            <label class="form-label">공개 범위 설정</label>
+            <div style="display: flex; gap: 12px; margin-top: 4px;">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="newChannelVisibility" value="public" checked> 공개 (탐색 노출)
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="newChannelVisibility" value="private"> 비공개 (+p)
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="newChannelVisibility" value="secret"> 비밀 (+s)
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="newChannelKeyInput">채널 비밀번호 (+k, 선택)</label>
+            <input type="password" id="newChannelKeyInput" class="custom-input" placeholder="비워두면 암호 없이 누구나 입장 가능" maxlength="30">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="newChannelLimitInput">최대 인원 제한 (+l, 선택)</label>
+            <input type="number" id="newChannelLimitInput" class="custom-input" placeholder="비워두면 무제한 (숫자 입력)" min="1" max="500">
+          </div>
+          <div class="modal-btn-row" style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" class="btn-cancel" id="cancelCreateChannelBtn" style="padding: 8px 16px; border-radius: var(--radius-xs); border: 1px solid var(--border-main); background: var(--bg-card); color: var(--text-primary); cursor: pointer;">취소</button>
+            <button type="submit" class="primary-btn" style="padding: 8px 18px; margin-top: 0;">입장 / 개설하기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Topic & Channel Mode Settings Edit Modal -->
+  <div class="modal-overlay" id="editTopicModal" style="display: none;">
+    <div class="modal-card">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-title">채널 Topic(주제) 및 모드 설정 (/mode)</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeEditTopicBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content">
+        <form id="editTopicForm" class="modal-form" action="javascript:void(0);" onsubmit="event.preventDefault(); return false;">
+          <div class="form-group">
+            <label class="form-label" for="editTopicInput">채널 토픽 (주제)</label>
+            <input type="text" id="editTopicInput" class="custom-input" placeholder="채널 주제 입력 (현재 방의 모든 사용자에게 공지됩니다)" required maxlength="80">
+          </div>
+          <div class="form-group" style="margin-top: 10px;">
+            <label class="form-label">채널 공개 범위</label>
+            <div style="display: flex; gap: 12px; margin-top: 4px;">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="editChannelVisibility" value="public" id="editVisPublic"> 공개
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="editChannelVisibility" value="private" id="editVisPrivate"> 비공개 (+p)
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <input type="radio" name="editChannelVisibility" value="secret" id="editVisSecret"> 비밀 (+s)
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="editChannelKeyInput">채널 암호 설정 / 해제 (+k)</label>
+            <input type="text" id="editChannelKeyInput" class="custom-input" placeholder="새 암호 입력 (해제하려면 빈칸)" maxlength="30">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="editChannelLimitInput">인원 제한 (+l)</label>
+            <input type="number" id="editChannelLimitInput" class="custom-input" placeholder="비워두면 무제한" min="1" max="500">
+          </div>
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="editChannelTopicLockCheck"> 방장만 토픽 변경 가능 (+t)
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="editChannelModeratedCheck"> 발언권 제한 모드 (+m: 방장 및 +v 발언권 소유자만 대화 가능)
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="editChannelInviteOnlyCheck"> 초대 전용 모드 (+i: 초대받은 사람만 입장 가능)
+            </label>
+          </div>
+          <div class="modal-btn-row" style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+            <button type="button" class="btn-cancel" id="cancelEditTopicBtn" style="padding: 8px 16px; border-radius: var(--radius-xs); border: 1px solid var(--border-main); background: var(--bg-card); color: var(--text-primary); cursor: pointer;">취소</button>
+            <button type="submit" class="primary-btn" style="padding: 8px 18px; margin-top: 0;">설정 저장</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Server Channels List Modal (/list) -->
+  <div class="modal-overlay" id="serverListModal" style="display: none; z-index: 1030;">
+    <div class="modal-card modal-wide">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-icon">📋</span>
+          <span class="win-title">서버 채널 탐색 (/list)</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeServerListBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content" style="padding-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px;">
+          <input type="text" id="serverChannelSearchInput" class="custom-input" placeholder="🔍 채널명 또는 주제로 검색..." style="flex: 1; padding: 7px 12px; font-size: 13px;">
+          <button type="button" class="secondary-btn" id="refreshServerListBtn" style="padding: 7px 14px; white-space: nowrap;">🔄 새로고침</button>
+        </div>
+        <div class="server-channels-container" id="serverChannelsContainer" style="max-height: 380px; overflow-y: auto; border: 1px solid var(--border-main); border-radius: var(--radius-xs);">
+          <!-- Server channels list rendered dynamically -->
+        </div>
+        <div class="modal-btn-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+          <span id="serverChannelTotalCount" style="font-size: 12px; color: var(--text-muted);">총 0개 채널</span>
+          <button type="button" class="primary-btn" id="confirmServerListBtn" style="padding: 7px 18px; margin-top: 0;">닫기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channel Password Key Prompt Modal -->
+  <div class="modal-overlay" id="channelKeyModal" style="display: none; z-index: 1060;">
+    <div class="modal-card" style="max-width: 380px;">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-icon">🔒</span>
+          <span class="win-title" id="channelKeyModalTitle">채널 비밀번호 입력</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeChannelKeyBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content">
+        <p id="channelKeyModalDesc" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">이 채널은 비밀번호로 보호되어 있습니다 (+k). 입장 비밀번호를 입력해 주세요.</p>
+        <form id="channelKeyForm" class="modal-form" action="javascript:void(0);" onsubmit="event.preventDefault(); return false;">
+          <input type="hidden" id="channelKeyTargetRoomId" value="">
+          <div class="form-group">
+            <label class="form-label" for="channelKeyInput">비밀번호</label>
+            <input type="password" id="channelKeyInput" class="custom-input" placeholder="비밀번호 입력" required autofocus>
+          </div>
+          <div id="channelKeyErrorMsg" style="color: #ef4444; font-size: 12px; margin-bottom: 8px; display: none;"></div>
+          <div class="modal-btn-row" style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" class="btn-cancel" id="cancelChannelKeyBtn" style="padding: 7px 16px; border-radius: var(--radius-xs); border: 1px solid var(--border-main); background: var(--bg-card); color: var(--text-primary); cursor: pointer;">취소</button>
+            <button type="submit" class="primary-btn" style="padding: 7px 18px; margin-top: 0;">입장하기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Slash Commands Help Modal -->
+  <div class="modal-overlay" id="cmdHelpModal" style="display: none;">
+    <div class="modal-card modal-wide">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-title">슬래시 명령어 및 대화 보관 안내</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeCmdHelpBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content">
+        <div class="help-section">
+          <h4 style="margin-bottom: 8px; font-size: 14px; font-weight: 700; color: var(--text-primary);">지원되는 슬래시 명령어 (채팅 입력창에 입력)</h4>
+          <div class="help-table-container">
+            <table class="help-table">
+              <thead>
+                <tr><th>명령어</th><th>설명</th><th>사용 예시</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>/join #채널 [암호]</code></td><td>채널 개설 및 즉시 입장 (암호 채널 대응)</td><td><code>/join #개발 mykey123</code></td></tr>
+                <tr><td><code>/part</code> (또는 <code>/leave</code>)</td><td>현재 채널에서 퇴장</td><td><code>/part</code></td></tr>
+                <tr><td><code>/list</code></td><td>현재 서버 채널 목록 탐색 창 열기</td><td><code>/list</code></td></tr>
+                <tr><td><code>/servers</code> (또는 <code>F2</code>)</td><td>화이트리스트 다중 서버 리스트 및 공개채널 탐색 창 열기</td><td><code>/servers</code></td></tr>
+                <tr><td><code>/server &lt;주소&gt; [#채널]</code></td><td>다른 서버 및 채널로 동시 접속 창 열기</td><td><code>/server https://c.org #게임채널</code></td></tr>
+                <tr><td><code>/topic &lt;주제&gt;</code></td><td>채널 주제(Topic) 변경 (+t 방장 전용)</td><td><code>/topic 오늘 밤 9시 쇼기 대국!</code></td></tr>
+                <tr><td><code>/mode #채널 [+/-모드] [인자]</code></td><td>채널 모드 설정 (+i,+t,+k,+l,+m,+n,+p,+s,+o,+v)</td><td><code>/mode #개발 +m</code> / <code>/mode #개발 +k pw123</code></td></tr>
+                <tr><td><code>/invite &lt;닉네임&gt; [#채널]</code></td><td>초대 전용(+i) 채널에 사용자 초대</td><td><code>/invite 코딩고양이</code></td></tr>
+                <tr><td><code>/op &lt;닉네임&gt;</code></td><td>다른 유저에게 방장(@) 권한 부여 (+o)</td><td><code>/op 코딩고양이</code></td></tr>
+                <tr><td><code>/deop &lt;닉네임&gt;</code></td><td>유저의 방장(@) 권한 회수 (-o)</td><td><code>/deop 코딩고양이</code></td></tr>
+                <tr><td><code>/kick &lt;닉네임&gt; [사유]</code></td><td>채널 내 유저 퇴장 조치 (방장 전용)</td><td><code>/kick 악성유저 도배 금지</code></td></tr>
+                <tr><td><code>/nick &lt;닉네임&gt;</code></td><td>내 닉네임 실시간 변경 (선점 확인)</td><td><code>/nick 코딩고양이</code></td></tr>
+                <tr><td><code>/nickpass &lt;암호&gt;</code></td><td>닉네임 비밀번호 등록/인증 (사칭 방지 보호)</td><td><code>/nickpass mysecret123</code></td></tr>
+                <tr><td><code>/identify &lt;암호&gt;</code></td><td>보호된 닉네임 본인 인증 (사칭 방어 해제)</td><td><code>/identify mysecret123</code></td></tr>
+                <tr><td><code>/me &lt;행동&gt;</code></td><td>액션 감정표현 메시지</td><td><code>/me 손을 흔들며 인사합니다</code></td></tr>
+                <tr><td><code>/clear</code></td><td>현재 대화창 내용 비우기</td><td><code>/clear</code></td></tr>
+                <tr><td><code>/export</code></td><td>현재 방의 로컬 대화 백업(.txt) 다운로드</td><td><code>/export</code></td></tr>
+                <tr><td><code>/whois &lt;닉네임&gt;</code> (또는 <code>/w</code>)</td><td>사용자 상세 정보(연결 주소, 입실 채널, 잠수 시간 등) 조회</td><td><code>/whois 코딩고양이</code></td></tr>
+                <tr><td><code>/help</code></td><td>이 도움말 안내창 열기</td><td><code>/help</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 관리자 전용 명령어 (서버 관리자 /oper 인증 시에만 표시) -->
+        <div class="help-section" id="operCmdSection" style="display: none; margin-top: 16px;">
+          <h4 style="margin-bottom: 8px; font-size: 14px; font-weight: 700; color: var(--accent-primary);">👑 서버 총괄 관리자(Operator) 전용 명령어</h4>
+          <div class="help-table-container">
+            <table class="help-table">
+              <thead>
+                <tr><th>명령어</th><th>설명</th><th>사용 예시</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>/oper &lt;아이디&gt; &lt;암호&gt;</code></td><td>서버 총괄 관리자(Operator) 권한 인증</td><td><code>/oper admin secret</code></td></tr>
+                <tr><td><code>/servername &lt;이름&gt;</code></td><td>서버 표시 이름 변경 (예: A서버, C서버)</td><td><code>/servername C서버</code></td></tr>
+                <tr><td><code>/serverurl &lt;주소&gt;</code></td><td>서버 공개 접속 주소 설정</td><td><code>/serverurl https://c.org</code></td></tr>
+                <tr><td><code>/peer add|del|list|sync</code></td><td>화이트리스트 이웃 서버 수동 등록/해제/동기화</td><td><code>/peer add https://c.org</code></td></tr>
+                <tr><td><code>/extcmd add|del|list</code></td><td>서버 전용 확장 명령어 등록 (타 서버 이동 시 자동 비활성화)</td><td><code>/extcmd add /ccc CCC 봇 호출|[CCC봇] 응답</code></td></tr>
+                <tr><td><code>/banlist</code></td><td>서버 전체 차단 목록(영구 및 임시 하루 밴) 조회</td><td><code>/banlist</code></td></tr>
+                <tr><td><code>/ban &lt;닉네임&gt; [사유]</code></td><td>악성 사용자 영구 IP 차단 및 강제 퇴장</td><td><code>/ban 악성유저</code></td></tr>
+                <tr><td><code>/unban &lt;닉네임 또는 IP&gt;</code></td><td>차단된 사용자 또는 IP 차단 해제</td><td><code>/unban 1.2.3.4</code> / <code>/unban 유저닉네임</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="help-notice-box">
+          <strong>🔒 대화 보관 안내</strong><br>
+          • 본인이 본 대화는 브라우저 로컬 저장소에 저장되며 <code>/export</code>로 백업할 수 있습니다.
+        </div>
+        <div class="modal-btn-row" style="display: flex; justify-content: flex-end;">
+          <button type="button" class="primary-btn" id="confirmCmdHelpBtn" style="padding: 8px 20px; margin-top: 0;">확인</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Image Lightbox Modal -->
+  <div id="imageLightbox" class="lightbox-modal" style="display: none;">
+    <div class="lightbox-backdrop" id="lightboxBackdrop"></div>
+    <div class="lightbox-content">
+      <div class="lightbox-toolbar">
+        <span class="lightbox-filename" id="lightboxFileName">image.jpg</span>
+        <div class="lightbox-btns">
+          <a href="#" id="lightboxDownloadBtn" class="lightbox-btn" download target="_blank" title="다운로드">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            다운로드
+          </a>
+          <button id="lightboxCloseBtn" class="lightbox-btn-icon" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="lightbox-image-wrap">
+        <img id="lightboxImg" src="" alt="확대된 이미지">
+      </div>
+    </div>
+  </div>
+
+  <!-- Distributed Whitelist Network Servers Modal (/servers or F2) -->
+  <div class="modal-overlay" id="networkServersModal" style="display: none; z-index: 1055;">
+    <div class="modal-card modal-wide" style="max-width: 820px;">
+      <div class="window-bar modal-window-bar">
+        <div class="win-title-wrap">
+          <span class="win-title">화이트리스트 네트워크 서버 리스트 &amp; 공개채널 탐색 (/servers · F2)</span>
+        </div>
+        <div class="win-controls">
+          <button type="button" class="win-btn win-close" id="closeNetworkServersBtn" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="modal-body-content" style="padding-bottom: 14px;">
+        <div style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span>좌측에서 <strong>서버를 클릭(또는 더블클릭)</strong>하면 해당 서버의 공개채널이 표시되며, 우측에서 <strong>채널을 더블클릭(또는 입장 클릭)</strong>하면 그 서버/채널로 동시 접속합니다.</span>
+          <button type="button" class="secondary-btn" id="refreshNetworkServersBtn" style="padding: 5px 12px; font-size: 12px; white-space: nowrap;">서버 목록 동기화</button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1.25fr; gap: 12px; min-height: 300px;">
+          <!-- Left: Whitelisted Servers List -->
+          <div style="display: flex; flex-direction: column; border: 1px solid var(--border-main); border-radius: var(--radius-xs); overflow: hidden; background: rgba(15, 23, 42, 0.5);">
+            <div style="padding: 8px 12px; font-size: 12px; font-weight: 700; color: #38bdf8; border-bottom: 1px solid var(--border-main); background: rgba(30, 41, 59, 0.7);">
+              1. 화이트리스트 서버 목록 (<span id="networkServerTotalCount">0</span>)
+            </div>
+            <div id="networkServersListContainer" style="flex: 1; max-height: 290px; overflow-y: auto; padding: 6px;">
+              <!-- Dynamically rendered server items -->
+            </div>
+          </div>
+
+          <!-- Right: Selected Server Public Channels & Modules -->
+          <div style="display: flex; flex-direction: column; border: 1px solid var(--border-main); border-radius: var(--radius-xs); overflow: hidden; background: rgba(15, 23, 42, 0.5);">
+            <div style="padding: 8px 12px; font-size: 12px; font-weight: 700; color: #34d399; border-bottom: 1px solid var(--border-main); background: rgba(30, 41, 59, 0.7); display: flex; justify-content: space-between; align-items: center;">
+              <span id="selectedNetworkServerTitle">2. 선택된 서버의 공개채널 리스트</span>
+              <span id="selectedNetworkServerProto" style="font-size: 11px; color: var(--text-muted); font-weight: normal;"></span>
+            </div>
+            <div id="selectedNetworkChannelsContainer" style="flex: 1; max-height: 230px; overflow-y: auto; padding: 6px;">
+              <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12.5px;">좌측 목록에서 서버를 선택하세요.</div>
+            </div>
+            <div id="selectedNetworkServerModulesBox" style="padding: 8px 10px; border-top: 1px solid var(--border-main); font-size: 11.5px; color: #cbd5e1; background: rgba(15, 23, 42, 0.85);">
+              서버 전용 확장 명령어/모듈: 없음 (표준 호환 서버)
+            </div>
+          </div>
+        </div>
+
+        <!-- Direct Server URL Connect Bar -->
+        <div style="margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border-main); border-radius: var(--radius-xs); background: rgba(30, 41, 59, 0.45); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 12px; font-weight: 700; color: var(--text-primary); white-space: nowrap;">직접 서버 연결:</span>
+          <input type="text" id="directServerUrlInput" class="custom-input" placeholder="https://c.org 또는 서버 주소" style="flex: 1; min-width: 180px; padding: 6px 10px; font-size: 12.5px;">
+          <input type="text" id="directServerChannelInput" class="custom-input" placeholder="#자유대화" value="#자유대화" style="width: 130px; padding: 6px 10px; font-size: 12.5px;">
+          <button type="button" class="primary-btn" id="directServerConnectBtn" style="padding: 6px 14px; margin-top: 0; font-size: 12.5px; white-space: nowrap;">새 서버창(또는 현재창) 접속</button>
+        </div>
+
+        <div class="modal-btn-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+          <span style="font-size: 11.5px; color: var(--text-muted);">화이트리스트 수동 교류 방식 · 스테이터스/이웃 서버 다운 시에도 마지막 교류 캐시가 유지됩니다.</span>
+          <button type="button" class="secondary-btn" id="confirmNetworkServersBtn" style="padding: 7px 18px;">닫기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Socket.io Client Script & App Logic -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js?v=20260926_multiserver5"></script>
+</body>
+</html>

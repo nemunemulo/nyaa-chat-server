@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# User uploads (keep directory structure)
+uploads/*
+!uploads/.gitkeep
+
+# Dynamic runtime data files (ephemeral / runtime DB)
+data/*.json
+data/peers_whitelist.txt
+!data/.gitkeep
+!data/peers_whitelist.example.txt
+
+# Environment and secrets
+.env
+*.env
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Standalone client is managed in a separate repository (nyaachat-client)
+client/
