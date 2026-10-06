@@ -275,13 +275,13 @@ try {
 const AI_RESERVED_NICKS = new Set(['네무', '네무로']);
 
 function isAiReservedNickname(nick) {
-  if (!nick) return false;
+  if (typeof nick !== 'string') return false;
   return AI_RESERVED_NICKS.has(nick.trim());
 }
 
 // Operator / Admin channel naming check
 function isOperChannelName(input) {
-  if (!input) return false;
+  if (typeof input !== 'string') return false;
   const clean = input.toLowerCase().replace(/[\s_#-]+/g, '');
   return clean === '관리자' || clean === '운영자' || clean === 'admin' || clean === 'oper' || clean === 'staff' || clean.includes('관리자') || clean.includes('운영자');
 }
@@ -327,9 +327,10 @@ function formatModeString(modes) {
 
 function parseModeString(modeStr, paramStr = '') {
   const result = [];
-  if (!modeStr) return result;
+  if (typeof modeStr !== 'string' || !modeStr.trim()) return result;
+  const safeParamStr = typeof paramStr === 'string' ? paramStr.trim() : '';
 
-  const rawParts = [...modeStr.trim().split(/\s+/), ...(paramStr ? paramStr.trim().split(/\s+/) : [])].filter(Boolean);
+  const rawParts = [...modeStr.trim().split(/\s+/), ...(safeParamStr ? safeParamStr.split(/\s+/) : [])].filter(Boolean);
   const flagTokens = [];
   const params = [];
 
@@ -573,7 +574,7 @@ function broadcastChannelListDebounced() {
 saveChannels();
 
 function normalizeChannelId(input) {
-  let clean = (input || '').trim();
+  let clean = typeof input === 'string' ? input.trim() : '';
   if (!clean.startsWith('#')) clean = '#' + clean;
   // Replace illegal room characters
   clean = clean.replace(/[\s/\\?%*:|"<>]+/g, '_');
@@ -1278,7 +1279,7 @@ io.on('connection', (socket) => {
     }
     const { userId, nickname, avatar, targetChannel: rawTargetChannel, channelKey, nickpass: rawNickpass } = data;
     const defaultRoom = '#자유대화';
-    const rawNick = (nickname || '').trim();
+    const rawNick = typeof nickname === 'string' ? nickname.trim() : '';
     if (!rawNick) {
       socket.emit('login_error', { message: '사용할 닉네임을 입력해 주세요.' });
       return;
@@ -1298,15 +1299,31 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const clientIp = getClientIp(socket);
+
     let isAiOperDirect = false;
     let aiOperIdDirect = null;
-    if (data.aioperId && data.aioperPw) {
-      const operId = String(data.aioperId).trim().toLowerCase();
-      const operPw = String(data.aioperPw).trim();
+    if (data.aioperId || data.aioperPw) {
+      const operLockout = checkOperLockout(clientIp);
+      if (operLockout.locked) {
+        socket.emit('login_error', {
+          message: `* 🚨 [접속 제한] 관리자/AI 로그인 ${OPER_MAX_FAILED_ATTEMPTS}회 실패로 인해 ${operLockout.remainingMinutes}분간 인증이 차단되었습니다.`
+        });
+        return;
+      }
+      const operId = typeof data.aioperId === 'string' ? data.aioperId.trim().toLowerCase() : '';
+      const operPw = typeof data.aioperPw === 'string' ? data.aioperPw.trim() : '';
       const aiAcc = AIOPER_ACCOUNTS[operId];
-      if (aiAcc && secureCompareStrings(aiAcc.pw, operPw)) {
+      if (aiAcc && operPw && secureCompareStrings(aiAcc.pw, operPw)) {
         isAiOperDirect = true;
         aiOperIdDirect = operId;
+        operFailedAttempts.delete(clientIp);
+      } else {
+        recordOperFailure(clientIp, reqNick, 'aioper');
+        socket.emit('login_error', {
+          message: '* ❌ AI 운영자 인증에 실패했습니다. (아이디 또는 암호 불일치)'
+        });
+        return;
       }
     }
 
@@ -1320,7 +1337,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    const clientIp = getClientIp(socket);
     // Security: Server-generated authoritative userId prevents identity and OP spoofing
     const resolvedUserId = 'u_' + crypto.randomBytes(6).toString('hex');
     const clientInstanceId = (typeof userId === 'string') ? userId.trim().slice(0, 48) : '';
@@ -1598,7 +1614,10 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { targetType, targetId } = data; // targetType: 'channel' | 'dm'
+    const targetType = typeof data.targetType === 'string' ? data.targetType.trim() : '';
+    const targetId = typeof data.targetId === 'string' ? data.targetId.trim() : '';
+    if (!targetId || (targetType !== 'channel' && targetType !== 'dm')) return;
+
     let newRoomId = '';
     let roomMeta = {};
 
@@ -1627,7 +1646,7 @@ io.on('connection', (socket) => {
         if (!isMember && !isOper) {
           // Check +k (key/password)
           if (channel.modes && channel.modes.k) {
-            const providedKey = (data.key || '').trim();
+            const providedKey = typeof data.key === 'string' ? data.key.trim() : '';
             if (providedKey !== channel.modes.k) {
               socket.emit('channel_key_required', {
                 roomId: channel.id,
@@ -1801,8 +1820,12 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const channelName = normalizeChannelId(data.channelName || data.name);
-    const topic = (data.topic || `${channelName} 대화방에 오신 것을 환영합니다.`).trim().slice(0, 80);
+    const rawChanName = typeof data.channelName === 'string' ? data.channelName : (typeof data.name === 'string' ? data.name : '');
+    const channelName = normalizeChannelId(rawChanName);
+    if (!channelName || channelName === '#') return;
+
+    const rawTopic = typeof data.topic === 'string' ? data.topic.trim() : '';
+    const topic = (rawTopic || `${channelName} 대화방에 오신 것을 환영합니다.`).slice(0, 80);
 
     let channel = getChannel(channelName);
 
@@ -1827,7 +1850,7 @@ io.on('connection', (socket) => {
       if (!isMember && !isOper) {
         // Check +k (key/password)
         if (channel.modes && channel.modes.k) {
-          const providedKey = (data.key || '').trim();
+          const providedKey = typeof data.key === 'string' ? data.key.trim() : '';
           if (providedKey !== channel.modes.k) {
             socket.emit('channel_key_required', {
               roomId: channel.id,
@@ -1974,7 +1997,8 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { channelId, topic, modeSettings } = data;
+    const channelId = typeof data.channelId === 'string' ? data.channelId.trim() : '';
+    if (!channelId || !channelId.startsWith('#')) return;
     const channel = getChannel(channelId);
     if (!channel) return;
     initChannelModes(channel);
@@ -1995,19 +2019,25 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (topic !== undefined) {
-      channel.topic = (topic || '').trim().slice(0, 80);
+    if (data.topic !== undefined) {
+      channel.topic = typeof data.topic === 'string' ? data.topic.trim().slice(0, 80) : '';
     }
 
     // If operator provided mode settings via modal:
-    if (isOp && modeSettings && typeof modeSettings === 'object') {
+    const modeSettings = data.modeSettings;
+    if (isOp && isSafeObject(modeSettings)) {
       if (modeSettings.isPrivate !== undefined) channel.modes.p = Boolean(modeSettings.isPrivate);
       if (modeSettings.isSecret !== undefined) channel.modes.s = Boolean(modeSettings.isSecret);
       if (modeSettings.isInviteOnly !== undefined) channel.modes.i = Boolean(modeSettings.isInviteOnly);
       if (modeSettings.isModerated !== undefined) channel.modes.m = Boolean(modeSettings.isModerated);
       if (modeSettings.isTopicProtected !== undefined) channel.modes.t = Boolean(modeSettings.isTopicProtected);
-      if (modeSettings.key !== undefined) channel.modes.k = modeSettings.key ? String(modeSettings.key).trim() : null;
-      if (modeSettings.limit !== undefined) channel.modes.l = modeSettings.limit ? parseInt(modeSettings.limit, 10) : null;
+      if (modeSettings.key !== undefined) {
+        channel.modes.k = typeof modeSettings.key === 'string' && modeSettings.key.trim() ? modeSettings.key.trim().slice(0, 50) : null;
+      }
+      if (modeSettings.limit !== undefined) {
+        const parsedLimit = parseInt(modeSettings.limit, 10);
+        channel.modes.l = (!isNaN(parsedLimit) && parsedLimit > 0) ? parsedLimit : null;
+      }
     }
 
     saveChannelsDebounced();
@@ -2040,14 +2070,18 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { roomId, modeStr, params } = data;
-    if (!roomId || !roomId.startsWith('#')) return;
+    const rawRoomId = typeof data.roomId === 'string' ? data.roomId.trim() : '';
+    if (!rawRoomId || !rawRoomId.startsWith('#')) return;
+    const roomId = rawRoomId;
     const channel = getChannel(roomId);
     if (!channel) return;
     initChannelModes(channel);
 
+    const modeStr = typeof data.modeStr === 'string' ? data.modeStr.trim() : '';
+    const params = typeof data.params === 'string' ? data.params.trim() : '';
+
     // If no mode string provided, just query current modes
-    if (!modeStr || !modeStr.trim()) {
+    if (!modeStr) {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
         roomId,
@@ -2182,8 +2216,8 @@ io.on('connection', (socket) => {
     if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
-    const { targetNickname, roomId } = data;
-    const targetRoom = roomId || currentUser.currentRoom;
+    const rawRoomId = typeof data.roomId === 'string' ? data.roomId.trim() : '';
+    const targetRoom = rawRoomId || currentUser.currentRoom;
     if (!targetRoom || !targetRoom.startsWith('#')) return;
     const channel = getChannel(targetRoom);
     if (!channel) return;
@@ -2201,14 +2235,15 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const cleanNick = (targetNickname || '').trim().toLowerCase();
+    const cleanNick = typeof data.targetNickname === 'string' ? data.targetNickname.trim().toLowerCase() : '';
+    if (!cleanNick) return;
     const targetUser = Array.from(users.values()).find(u => u.nickname.toLowerCase() === cleanNick);
     if (!targetUser) {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
         roomId: targetRoom,
         type: 'system',
-        content: `* 현재 접속 중인 "${targetNickname}" 유저를 찾을 수 없습니다.`,
+        content: `* 현재 접속 중인 "${cleanNick}" 유저를 찾을 수 없습니다.`,
         timestamp: Date.now()
       });
       return;
@@ -2261,7 +2296,13 @@ io.on('connection', (socket) => {
 
     requester.lastActiveTime = Date.now();
 
-    const targetQuery = (typeof data === 'string' ? data : (isSafeObject(data) ? (data?.target || data?.nickname || data?.userId || '') : '')).trim();
+    let targetQuery = '';
+    if (typeof data === 'string') {
+      targetQuery = data.trim();
+    } else if (isSafeObject(data)) {
+      const rawTarget = typeof data.target === 'string' ? data.target : (typeof data.nickname === 'string' ? data.nickname : (typeof data.userId === 'string' ? data.userId : ''));
+      targetQuery = rawTarget.trim();
+    }
     if (!targetQuery) {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -2320,8 +2361,9 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { roomId, targetNickname } = data;
-    if (!roomId || !roomId.startsWith('#')) return;
+    const rawRoomId = typeof data.roomId === 'string' ? data.roomId.trim() : '';
+    if (!rawRoomId || !rawRoomId.startsWith('#')) return;
+    const roomId = rawRoomId;
     const channel = getChannel(roomId);
     if (!channel) return;
     if (channel.isService && !currentUser.isServerOper) {
@@ -2348,7 +2390,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const cleanTarget = (targetNickname || '').trim().toLowerCase();
+    const cleanTarget = typeof data.targetNickname === 'string' ? data.targetNickname.trim().toLowerCase() : '';
+    if (!cleanTarget) return;
     const targetUser = Array.from(users.values()).find(
       (u) => (u.joinedChannels ? u.joinedChannels.has(roomId) : u.currentRoom === roomId) && u.nickname.toLowerCase() === cleanTarget
     );
@@ -2358,7 +2401,7 @@ io.on('connection', (socket) => {
         id: `sys_${Date.now()}`,
         roomId,
         type: 'system',
-        content: `* 현재 방에 입장 중인 "${targetNickname}" 사용자를 찾을 수 없습니다.`,
+        content: `* 현재 방에 입장 중인 "${cleanTarget}" 사용자를 찾을 수 없습니다.`,
         timestamp: Date.now()
       });
       return;
@@ -2399,8 +2442,9 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { roomId, targetNickname } = data;
-    if (!roomId || !roomId.startsWith('#')) return;
+    const rawRoomId = typeof data.roomId === 'string' ? data.roomId.trim() : '';
+    if (!rawRoomId || !rawRoomId.startsWith('#')) return;
+    const roomId = rawRoomId;
     const channel = getChannel(roomId);
     if (!channel) return;
     if (!Array.isArray(channel.operators)) channel.operators = [];
@@ -2417,7 +2461,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const cleanTarget = (targetNickname || '').trim().toLowerCase();
+    const cleanTarget = typeof data.targetNickname === 'string' ? data.targetNickname.trim().toLowerCase() : '';
+    if (!cleanTarget) return;
     if (cleanTarget === BOT_NAME.toLowerCase() || cleanTarget === BOT_ID.toLowerCase() || cleanTarget === '^냥봇') {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -2438,7 +2483,7 @@ io.on('connection', (socket) => {
         id: `sys_${Date.now()}`,
         roomId,
         type: 'system',
-        content: `* 현재 방에 입장 중인 "${targetNickname}" 사용자를 찾을 수 없습니다.`,
+        content: `* 현재 방에 입장 중인 "${cleanTarget}" 사용자를 찾을 수 없습니다.`,
         timestamp: Date.now()
       });
       return;
@@ -2470,7 +2515,7 @@ io.on('connection', (socket) => {
     if (!currentUser) return;
 
     const oldNick = currentUser.nickname;
-    const rawNewNick = (data.newNickname || '').trim();
+    const rawNewNick = typeof data.newNickname === 'string' ? data.newNickname.trim() : '';
 
     if (!rawNewNick) {
       socket.emit('nickname_error', {
@@ -2576,8 +2621,8 @@ io.on('connection', (socket) => {
     if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
-
-    const targetRoom = data.channelId || currentUser.currentRoom;
+    const rawChanId = typeof data.channelId === 'string' ? data.channelId.trim() : '';
+    const targetRoom = rawChanId || currentUser.currentRoom;
     if (targetRoom && targetRoom !== '#자유대화') {
       socket.to(targetRoom).emit('user_typing', {
         userId: currentUser.userId,
@@ -2650,8 +2695,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const operId = (data.operId || data.username || data.id || '').trim();
-    const operPw = (data.operPw || data.password || data.pw || '').trim();
+    const rawId = typeof data.operId === 'string' ? data.operId : (typeof data.username === 'string' ? data.username : (typeof data.id === 'string' ? data.id : ''));
+    const rawPw = typeof data.operPw === 'string' ? data.operPw : (typeof data.password === 'string' ? data.password : (typeof data.pw === 'string' ? data.pw : ''));
+    const operId = rawId.trim();
+    const operPw = rawPw.trim();
 
     if (secureCompareStrings(operId, expectedOperId) && secureCompareStrings(operPw, expectedOperPw)) {
       operFailedAttempts.delete(clientIp);
@@ -2696,8 +2743,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const operId = (data.operId || data.username || data.id || '').trim().toLowerCase();
-    const operPw = (data.operPw || data.password || data.pw || '').trim();
+    const rawAiId = typeof data.operId === 'string' ? data.operId : (typeof data.username === 'string' ? data.username : (typeof data.id === 'string' ? data.id : ''));
+    const rawAiPw = typeof data.operPw === 'string' ? data.operPw : (typeof data.password === 'string' ? data.password : (typeof data.pw === 'string' ? data.pw : ''));
+    const operId = rawAiId.trim().toLowerCase();
+    const operPw = rawAiPw.trim();
 
     const account = AIOPER_ACCOUNTS[operId];
     if (account && secureCompareStrings(account.pw, operPw)) {
@@ -2750,8 +2799,9 @@ io.on('connection', (socket) => {
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
-    const { roomId, targetNickname, reason } = data;
-    if (!roomId || !roomId.startsWith('#')) return;
+    const rawRoomId = typeof data.roomId === 'string' ? data.roomId.trim() : '';
+    if (!rawRoomId || !rawRoomId.startsWith('#')) return;
+    const roomId = rawRoomId;
     const channel = getChannel(roomId);
     if (!channel) return;
 
@@ -2767,7 +2817,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const cleanTarget = (targetNickname || '').trim().toLowerCase();
+    const cleanTarget = typeof data.targetNickname === 'string' ? data.targetNickname.trim().toLowerCase() : '';
+    if (!cleanTarget) return;
     if (cleanTarget === BOT_NAME.toLowerCase() || cleanTarget === BOT_ID.toLowerCase() || cleanTarget === '^냥봇') {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -2788,13 +2839,14 @@ io.on('connection', (socket) => {
         id: `sys_${Date.now()}`,
         roomId,
         type: 'system',
-        content: `* 현재 채널에 참가 중인 "${targetNickname}" 사용자를 찾을 수 없습니다.`,
+        content: `* 현재 채널에 참가 중인 "${cleanTarget}" 사용자를 찾을 수 없습니다.`,
         timestamp: Date.now()
       });
       return;
     }
 
-    const kickReason = (reason || '채널 방장에 의해 추방되었습니다.').trim();
+    const rawReason = typeof data.reason === 'string' ? data.reason.trim() : '';
+    const kickReason = (rawReason || '채널 방장에 의해 추방되었습니다.').slice(0, 200);
 
     // 1. Remove from channel.operators
     if (channel.operators) {
@@ -2871,8 +2923,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const { targetNickname, reason } = data;
-    const cleanTarget = (targetNickname || '').trim().toLowerCase();
+    const cleanTarget = typeof data.targetNickname === 'string' ? data.targetNickname.trim().toLowerCase() : '';
+    if (!cleanTarget) return;
     if (cleanTarget === BOT_NAME.toLowerCase() || cleanTarget === BOT_ID.toLowerCase() || cleanTarget === '^냥봇') {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -2893,7 +2945,7 @@ io.on('connection', (socket) => {
         id: `sys_${Date.now()}`,
         roomId: currentUser.currentRoom,
         type: 'system',
-        content: `* 현재 접속 중인 "${targetNickname}" 사용자를 찾을 수 없습니다.`,
+        content: `* 현재 접속 중인 "${cleanTarget}" 사용자를 찾을 수 없습니다.`,
         timestamp: Date.now()
       });
       return;
@@ -2934,7 +2986,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const banReason = (reason || '서버 운영 정책 위반으로 영구 차단되었습니다.').trim();
+    const rawReason = typeof data.reason === 'string' ? data.reason.trim() : '';
+    const banReason = (rawReason || '서버 운영 정책 위반으로 영구 차단되었습니다.').slice(0, 200);
 
     bannedIps.add(targetIp);
     bannedIpMeta.set(targetIp, {
@@ -2982,7 +3035,8 @@ io.on('connection', (socket) => {
       });
       return;
     }
-    const targetInput = (data.targetIp || data.target || '').trim();
+    const rawTarget = typeof data.targetIp === 'string' ? data.targetIp : (typeof data.target === 'string' ? data.target : '');
+    const targetInput = rawTarget.trim();
     if (!targetInput) {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -3185,17 +3239,28 @@ io.on('connection', (socket) => {
     const sender = users.get(socket.id);
     if (!sender) return;
 
-    const { roomId, content, type } = msgData;
-    if (!roomId || typeof roomId !== 'string') return;
+    const rawRoomId = typeof msgData.roomId === 'string' ? msgData.roomId.trim() : '';
+    if (!rawRoomId) return;
 
+    const roomId = rawRoomId;
     const isChannel = roomId.startsWith('#');
     const isDm = roomId.startsWith('dm_');
     if (!isChannel && !isDm) {
       return; // Reject arbitrary roomIds (e.g. socket.id targeting)
     }
 
+    // Sender must be in channel to send message to it
+    if (isChannel) {
+      const channel = getChannel(roomId);
+      if (!channel) return;
+      if (!sender.joinedChannels || !sender.joinedChannels.has(roomId)) {
+        return; // Reject messages to channels user has not joined
+      }
+    }
+
     // NickServ Command Interception (/nickpass, /identify, /register, /unregister)
-    const trimmedContent = (content || '').trim();
+    const rawContent = typeof msgData.content === 'string' ? msgData.content : '';
+    const trimmedContent = rawContent.trim();
     if (trimmedContent.startsWith('/')) {
       const parts = trimmedContent.slice(1).trim().split(/\s+/);
       const cmd = (parts[0] || '').toLowerCase();
@@ -3593,12 +3658,12 @@ io.on('connection', (socket) => {
       }
     }
 
-    let cleanContent = (content || '').trim();
+    let cleanContent = rawContent.trim();
     if (cleanContent.length > 2000) {
       cleanContent = cleanContent.slice(0, 2000);
     }
 
-    const resolvedType = type === 'action' ? 'action' : 'text';
+    const resolvedType = msgData.type === 'action' ? 'action' : 'text';
     if (!cleanContent && resolvedType !== 'action') {
       return;
     }
@@ -3658,12 +3723,12 @@ io.on('connection', (socket) => {
     // Check if message triggers Bot response (mention in channel or 1:1 DM)
     const botChannel = getChannel(roomId);
     const isServiceRoom = Boolean(botChannel && (botChannel.isService || botChannel.id === '#자유대화'));
-    const isChannelMention = isServiceRoom && (content.includes('냥봇') || content.includes('@냥봇'));
+    const isChannelMention = isServiceRoom && (cleanContent.includes('냥봇') || cleanContent.includes('@냥봇'));
     const isBotDm = roomId.startsWith('dm_') && roomId.includes('bot_nyaa');
 
-    if ((type === 'text' || !type) && (isChannelMention || isBotDm)) {
+    if ((resolvedType === 'text') && (isChannelMention || isBotDm)) {
       setTimeout(() => {
-        const replyText = generateBotResponse(content || '', sender.nickname, roomId);
+        const replyText = generateBotResponse(cleanContent || '', sender.nickname, roomId);
         const botChannel = getChannel(roomId);
         const botIsOp = Boolean(botChannel && Array.isArray(botChannel.operators) && botChannel.operators.includes(BOT_ID));
         const botMsg = {
@@ -3694,8 +3759,8 @@ io.on('connection', (socket) => {
     }
 
     // Check for link preview asynchronously if text
-    if (type === 'text') {
-      const urlMatch = (content || '').match(/(https?:\/\/[^\s]+)/);
+    if (resolvedType === 'text') {
+      const urlMatch = (cleanContent || '').match(/(https?:\/\/[^\s]+)/);
       if (urlMatch) {
         const targetUrl = urlMatch[1];
         getLinkPreview(targetUrl).then((preview) => {

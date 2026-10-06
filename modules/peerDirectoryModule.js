@@ -19,7 +19,19 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const { safeAtomicWriteFileSync } = require('./fsSafe');
+
+function secureCompareStrings(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 // 절대 침해 불가 기본 표준 명령어 (갈라파고스화 방지 성역)
 const PROTECTED_CORE_COMMANDS = new Set([
@@ -546,15 +558,20 @@ function setupPeerDirectoryModule({
     });
   });
 
-  // Mutual Backup Gossip Endpoint (Strictly Whitelist-Protected & Reverse-Verified!)
+  // Mutual Backup Gossip Endpoint (Strictly Whitelist-Protected & Secret-Verified!)
   app.post('/api/peer-sync', express.json({ limit: '256kb' }), async (req, res) => {
-    // 1. Optional Token Authentication for Peer Sync
+    // 1. Mandatory Token Authentication for Peer Sync (Fail-Closed)
     const requiredPeerSecret = (process.env.PEER_SYNC_SECRET || '').trim();
-    if (requiredPeerSecret) {
-      const providedToken = (req.headers['x-peer-token'] || req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
-      if (!providedToken || providedToken !== requiredPeerSecret) {
-        return res.status(401).json({ error: 'PEER_AUTH_REQUIRED', message: '피어 동기화 인증 토큰이 필요하거나 올바르지 않습니다.' });
-      }
+    if (!requiredPeerSecret) {
+      return res.status(503).json({
+        error: 'PEER_SYNC_DISABLED',
+        message: '서버에 PEER_SYNC_SECRET 환경변수가 설정되지 않아 피어 동기화 수신이 비활성화되어 있습니다. (.env 파일에 PEER_SYNC_SECRET 설정 필요)'
+      });
+    }
+
+    const providedToken = (req.headers['x-peer-token'] || req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+    if (!providedToken || !secureCompareStrings(providedToken, requiredPeerSecret)) {
+      return res.status(401).json({ error: 'PEER_AUTH_REQUIRED', message: '피어 동기화 인증 토큰이 필요하거나 올바르지 않습니다.' });
     }
 
     const body = req.body || {};

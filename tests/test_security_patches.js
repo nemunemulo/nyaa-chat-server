@@ -168,6 +168,72 @@ async function runTests() {
   // Check that channel name is at most 30 characters
   console.log('✔ normalizeChannelId enforced 30 character limit!');
 
+  console.log('\n--- Test 7: Non-String Field Type Hardening (No TypeError / Crash) ---');
+  // Send packets where properties are numbers, objects, booleans instead of strings
+  client1.emit('send_message', { roomId: 12345, content: 99999 });
+  client1.emit('send_message', { roomId: testChan, content: { malicious: 'nested' } });
+  client1.emit('switch_room', { targetType: 123, targetId: {} });
+  client1.emit('join_channel', { channelName: 8888, topic: [], key: {} });
+  client1.emit('set_topic', { channelId: testChan, topic: { bad: 'type' }, modeSettings: 'not-an-object' });
+  client1.emit('set_channel_mode', { roomId: testChan, modeStr: 12345, params: {} });
+  client1.emit('invite_user', { roomId: 999, targetNickname: 123 });
+  client1.emit('whois', { target: { obj: true } });
+  client1.emit('grant_op', { roomId: 444, targetNickname: [] });
+  client1.emit('revoke_op', { roomId: 555, targetNickname: false });
+  client1.emit('change_nickname', { newNickname: 9999 });
+  client1.emit('part_channel', { channelId: {} });
+  client1.emit('kick_user', { roomId: 123, targetNickname: {}, reason: 456 });
+  client1.emit('ban_user', { targetNickname: [], reason: {} });
+  client1.emit('unban_ip', { targetIp: 123 });
+  client1.emit('oper_login', { operId: 123, operPw: [] });
+  client1.emit('aioper_login', { operId: {}, operPw: 999 });
+  await delay(500);
+  console.log('✔ All non-string event payloads handled safely without TypeError or server disruption!');
+
+  console.log('\n--- Test 8: AI Oper Brute-Force Shield in user_join ---');
+  let lockoutEncountered = false;
+  for (let i = 1; i <= 6; i++) {
+    const attemptClient = ioClient(SERVER_URL, { transports: ['websocket'], forceNew: true });
+    await new Promise((res) => attemptClient.on('connect', res));
+    let errMessage = null;
+    attemptClient.on('login_error', (data) => {
+      errMessage = data?.message;
+    });
+    attemptClient.emit('user_join', {
+      nickname: `BadOperUser_${i}`,
+      aioperId: 'nemu',
+      aioperPw: 'wrongpassword_' + i
+    });
+    await delay(200);
+    attemptClient.disconnect();
+    if (errMessage && errMessage.includes('5회 실패')) {
+      lockoutEncountered = true;
+      console.log(`✔ Attempt ${i} correctly triggered 15-minute brute-force lockout: ${errMessage}`);
+      break;
+    }
+  }
+  assert.strictEqual(lockoutEncountered, true, 'AI oper brute-force lockout must be enforced in user_join!');
+
+  console.log('\n--- Test 9: Peer Sync Fail-Closed Security (HTTP 503) ---');
+  const peerSyncRes = await new Promise((resolve) => {
+    const req = http.request(
+      `${SERVER_URL}/api/peer-sync`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => {
+          resolve({ status: res.statusCode, body: data });
+        });
+      }
+    );
+    req.write(JSON.stringify({ serverUrl: 'http://test-peer.com' }));
+    req.end();
+  });
+  assert.strictEqual(peerSyncRes.status, 503, 'Peer sync without secret must return HTTP 503 fail-closed!');
+  assert(peerSyncRes.body.includes('PEER_SYNC_DISABLED'), 'Peer sync body must indicate PEER_SYNC_DISABLED');
+  console.log('✔ /api/peer-sync returned HTTP 503 PEER_SYNC_DISABLED when PEER_SYNC_SECRET is unset!');
+
   console.log('\n🎉 ALL SECURITY PATCH TESTS PASSED SUCCESSFULLY! 🎉\n');
 
   client1.disconnect();
