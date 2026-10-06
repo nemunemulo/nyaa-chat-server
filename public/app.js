@@ -178,6 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let networkDirectoryServers = [];
   let selectedNetworkServerUrl = null;
   let announcedServerExtKey = '';
+  let sessionNickpass = '';
 
   // =========================================================
   // Client Local History Persistence Engine (Strictly Per-Server + Per-Channel)
@@ -698,10 +699,8 @@ document.addEventListener('DOMContentLoaded', () => {
     nicknameInput.value = savedNick;
   }
   const nickpassInput = document.getElementById('nickpassInput');
-  const savedNickpass = localStorage.getItem('omnichat_nickpass');
-  if (nickpassInput && savedNickpass) {
-    nickpassInput.value = savedNickpass;
-  }
+  // OWASP security: purge legacy plaintext passwords from localStorage
+  localStorage.removeItem('omnichat_nickpass');
   if (savedAvatar && selectedAvatarSpan) selectedAvatarSpan.textContent = savedAvatar;
 
   if (targetChannelParam) {
@@ -758,9 +757,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const nickpassInputEl = document.getElementById('nickpassInput');
-    const nickpass = (nickpassInputEl && nickpassInputEl.value) ? nickpassInputEl.value.trim() : (localStorage.getItem('omnichat_nickpass') || '');
+    const nickpass = (nickpassInputEl && nickpassInputEl.value) ? nickpassInputEl.value.trim() : (sessionNickpass || '');
     if (nickpass) {
-      localStorage.setItem('omnichat_nickpass', nickpass);
+      sessionNickpass = nickpass;
     }
 
     const payload = {
@@ -787,10 +786,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let webPingTimer = null;
     socket.on('connect', () => {
-      const savedPass = localStorage.getItem('omnichat_nickpass') || '';
       const payloadToSend = {
         ...lastLoginPayload,
-        nickpass: lastLoginPayload?.nickpass || savedPass || undefined,
+        nickpass: lastLoginPayload?.nickpass || sessionNickpass || undefined,
         targetChannel: (currentUser && currentRoom?.id) ? currentRoom.id : (lastLoginPayload.targetChannel || targetChannelParam || currentRoom?.id)
       };
       socket.emit('user_join', payloadToSend);
@@ -1818,35 +1816,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Multimedia path (image/video/file)
     let mediaHtml = '';
-    if (msg.type === 'image' && msg.fileInfo) {
+    const safeMediaUrl = msg.fileInfo ? sanitizeMediaUrl(msg.fileInfo.url) : '';
+    if (safeMediaUrl && msg.type === 'image' && msg.fileInfo) {
+      const safeOrig = escapeHtml(msg.fileInfo.originalName || 'image');
+      const safeUrlAttr = escapeHtml(safeMediaUrl);
       mediaHtml = `
-        <div class="media-image-container" data-img-url="${msg.fileInfo.url}" data-img-name="${escapeHtml(msg.fileInfo.originalName)}">
-          <img src="${msg.fileInfo.url}" alt="${escapeHtml(msg.fileInfo.originalName)}" loading="lazy">
+        <div class="media-image-container" data-img-url="${safeUrlAttr}" data-img-name="${safeOrig}">
+          <img src="${safeUrlAttr}" alt="${safeOrig}" loading="lazy">
           <div class="media-image-overlay">
             <span class="overlay-zoom-icon">🔍 확대보기</span>
           </div>
         </div>
       `;
-    } else if (msg.type === 'video' && msg.fileInfo) {
+    } else if (safeMediaUrl && msg.type === 'video' && msg.fileInfo) {
+      const safeMime = escapeHtml(msg.fileInfo.mimetype || 'video/mp4');
+      const safeUrlAttr = escapeHtml(safeMediaUrl);
       mediaHtml = `
         <div class="media-video-container">
           <video controls preload="metadata">
-            <source src="${msg.fileInfo.url}" type="${msg.fileInfo.mimetype || 'video/mp4'}">
+            <source src="${safeUrlAttr}" type="${safeMime}">
             브라우저가 동영상 재생을 지원하지 않습니다.
           </video>
         </div>
       `;
-    } else if (msg.type === 'file' && msg.fileInfo) {
-      const ext = msg.fileInfo.originalName.split('.').pop() || '';
+    } else if (safeMediaUrl && msg.type === 'file' && msg.fileInfo) {
+      const safeOrig = escapeHtml(msg.fileInfo.originalName || 'file');
+      const ext = safeOrig.split('.').pop() || '';
       const icon = getFileIcon(ext);
+      const safeUrlAttr = escapeHtml(safeMediaUrl);
       mediaHtml = `
         <div class="media-file-card">
           <div class="file-card-icon">${icon}</div>
           <div class="file-card-details">
-            <span class="file-card-name" title="${escapeHtml(msg.fileInfo.originalName)}">${escapeHtml(msg.fileInfo.originalName)}</span>
+            <span class="file-card-name" title="${safeOrig}">${safeOrig}</span>
             <span class="file-card-size">${formatFileSize(msg.fileInfo.size)}</span>
           </div>
-          <a href="${msg.fileInfo.url}" download="${escapeHtml(msg.fileInfo.originalName)}" target="_blank" class="file-download-btn" title="다운로드">
+          <a href="${safeUrlAttr}" download="${safeOrig}" target="_blank" class="file-download-btn" title="다운로드">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           </a>
         </div>
@@ -1917,6 +1922,23 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function sanitizeMediaUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const clean = url.trim();
+    if (/^\/uploads\/[a-zA-Z0-9._-]+$/.test(clean) && !clean.includes('..')) {
+      return clean;
+    }
+    try {
+      const parsed = new URL(clean, window.location.origin);
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin) {
+        if (/^\/uploads\/[a-zA-Z0-9._-]+$/.test(parsed.pathname) && !parsed.pathname.includes('..')) {
+          return parsed.pathname;
+        }
+      }
+    } catch (e) {}
+    return '';
   }
 
   function formatText(text) {
@@ -2308,10 +2330,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'register':
       case 'unregister': {
         if ((cmd === 'nickpass' && args.length >= 1) || (cmd === 'register' && args.length >= 1) || (cmd === 'identify' && args.length >= 1) || (cmd === 'id' && args.length >= 1)) {
-          const pass = args[0];
-          localStorage.setItem('omnichat_nickpass', pass);
+          sessionNickpass = args[0];
         } else if (cmd === 'unregister') {
-          localStorage.removeItem('omnichat_nickpass');
+          sessionNickpass = '';
         }
         socket.emit('send_message', {
           roomId: currentRoom.id,

@@ -113,14 +113,26 @@ function saveBannedIps() {
   } catch (e) {}
 }
 
+function isTrustedProxy(ip) {
+  if (!ip) return false;
+  const clean = ip.replace(/^::ffff:/, '');
+  if (clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true;
+  if (process.env.TRUST_PROXY === 'true') return true;
+  if (process.env.TRUSTED_PROXIES) {
+    const list = process.env.TRUSTED_PROXIES.split(',').map(s => s.trim());
+    if (list.includes(clean)) return true;
+  }
+  return false;
+}
+
 function getClientIp(socket) {
   if (!socket) return '';
+  const raw = (socket.handshake?.address || socket.conn?.remoteAddress || '').replace(/^::ffff:/, '');
   const forwarded = socket.handshake?.headers?.['x-forwarded-for'];
-  if (forwarded) {
+  if (forwarded && isTrustedProxy(raw)) {
     return forwarded.split(',')[0].trim().replace(/^::ffff:/, '');
   }
-  const raw = socket.handshake?.address || socket.conn?.remoteAddress || '';
-  return raw.replace(/^::ffff:/, '');
+  return raw;
 }
 
 // User IP Tracking (Recent mapping of userId -> client IP for offline moderation)
@@ -1132,6 +1144,35 @@ io.use((socket, next) => {
 
 // Track failed operator login attempts per IP for rate limiting and security
 const operFailedAttempts = new Map(); // ip -> { count: number, lastAttempt: number }
+const OPER_MAX_FAILED_ATTEMPTS = 5;
+const OPER_LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes lockout
+
+function checkOperLockout(clientIp) {
+  const record = operFailedAttempts.get(clientIp);
+  if (!record) return { locked: false };
+  if (record.count >= OPER_MAX_FAILED_ATTEMPTS) {
+    const elapsed = Date.now() - record.lastAttempt;
+    if (elapsed < OPER_LOCKOUT_DURATION_MS) {
+      const remainingMinutes = Math.ceil((OPER_LOCKOUT_DURATION_MS - elapsed) / 60000);
+      return { locked: true, remainingMinutes };
+    } else {
+      operFailedAttempts.delete(clientIp);
+      return { locked: false };
+    }
+  }
+  return { locked: false };
+}
+
+function recordOperFailure(clientIp, userNickname, loginType) {
+  const record = operFailedAttempts.get(clientIp) || { count: 0, lastAttempt: 0 };
+  record.count += 1;
+  record.lastAttempt = Date.now();
+  operFailedAttempts.set(clientIp, record);
+
+  if (record.count >= OPER_MAX_FAILED_ATTEMPTS) {
+    console.warn(`[Security Alert] IP ${clientIp} (${loginType} nick: ${userNickname}) locked out after ${record.count} failed attempts.`);
+  }
+}
 
 // Ultra-lightweight Whitelist Peer Directory & Server Extensions Module
 const peerDirectory = setupPeerDirectoryModule({
@@ -1254,7 +1295,9 @@ io.on('connection', (socket) => {
     }
 
     const clientIp = getClientIp(socket);
-    const resolvedUserId = userId || socket.id;
+    // Security: Server-generated authoritative userId prevents identity and OP spoofing
+    const resolvedUserId = 'u_' + crypto.randomBytes(6).toString('hex');
+    const clientInstanceId = (typeof userId === 'string') ? userId.trim().slice(0, 48) : '';
 
     // NickServ: Registered Nickname Check
     const isRegisteredNick = nickServ.isRegistered(reqNick);
@@ -1287,45 +1330,49 @@ io.on('connection', (socket) => {
     }
 
     // ID / Nickname Preemption Check:
-    // If another active online socket from a DIFFERENT user already uses this nickname (case-insensitive), reject.
-    const isNickTakenByOther = Array.from(users.values()).some(
-      (u) => u.nickname.toLowerCase() === reqNick.toLowerCase() &&
-             u.socketId !== socket.id &&
-             u.userId !== resolvedUserId
+    // If another active online socket already uses this nickname (case-insensitive)
+    const existingNickUser = Array.from(users.values()).find(
+      (u) => u.nickname.toLowerCase() === reqNick.toLowerCase() && u.socketId !== socket.id
     );
 
-    if (isNickTakenByOther) {
-      socket.emit('login_error', {
-        message: `"${reqNick}" 닉네임은 현재 접속 중인 사용자가 이미 선점하고 있습니다. 다른 닉네임을 입력해 주세요.`
-      });
-      return;
+    if (existingNickUser) {
+      // If same client IP or same clientInstanceId, treat as browser refresh / reconnect: gracefully replace old session
+      const isSameClient = (existingNickUser.clientIp === clientIp) || 
+                           (clientInstanceId && existingNickUser.clientInstanceId === clientInstanceId);
+      if (isSameClient) {
+        const oldSocket = io.sockets.sockets.get(existingNickUser.socketId);
+        if (oldSocket) {
+          oldSocket.emit('login_error', { message: '다른 창 또는 새로고침으로 인해 이전 세션이 종료되었습니다.' });
+          oldSocket.disconnect(true);
+        }
+        users.delete(existingNickUser.socketId);
+      } else {
+        socket.emit('login_error', {
+          message: `"${reqNick}" 닉네임은 현재 접속 중인 사용자가 이미 선점하고 있습니다. 다른 닉네임을 입력해 주세요.`
+        });
+        return;
+      }
     }
 
     // Single-Session Policy: Prevent duplicate multi-window/multi-browser logins from the same computer/IP
+    // In production, x-test-client is strictly ignored; only NODE_ENV === 'test' may use it.
     const isTestClient = Boolean(
-      socket.handshake?.headers?.['x-test-client'] === 'true' ||
+      (process.env.NODE_ENV === 'test' && socket.handshake?.headers?.['x-test-client'] === 'true') ||
       process.env.ALLOW_MULTI_CONNECT === 'true'
     );
 
     if (!isTestClient) {
-      // 1) Same browser session check (same userId)
-      const existingUserSession = Array.from(users.values()).find(
-        (u) => u.userId === resolvedUserId && u.socketId !== socket.id
-      );
+      // 1) Same browser session check with a DIFFERENT nickname:
+      if (clientInstanceId) {
+        const sameBrowserDiffNick = Array.from(users.values()).find(
+          (u) => u.clientInstanceId === clientInstanceId &&
+                 u.socketId !== socket.id &&
+                 u.nickname.toLowerCase() !== reqNick.toLowerCase()
+        );
 
-      if (existingUserSession) {
-        if (existingUserSession.nickname.toLowerCase() === reqNick.toLowerCase()) {
-          // Page refresh or reconnect with same nickname: gracefully replace old session
-          const oldSocket = io.sockets.sockets.get(existingUserSession.socketId);
-          if (oldSocket) {
-            oldSocket.emit('login_error', { message: '다른 창 또는 새로고침으로 인해 이전 세션이 종료되었습니다.' });
-            oldSocket.disconnect(true);
-          }
-          users.delete(existingUserSession.socketId);
-        } else {
-          // Attempting to log in with a 2nd nickname in the same browser
+        if (sameBrowserDiffNick) {
           socket.emit('login_error', {
-            message: `이미 현재 브라우저에서 "${existingUserSession.nickname}"(으)로 접속 중입니다.\n내부 로그 충돌 및 오류 방지를 위해 한 브라우저에서는 하나의 닉네임만 이용하실 수 있습니다.`
+            message: `이미 현재 브라우저에서 "${sameBrowserDiffNick.nickname}"(으)로 접속 중입니다.\n내부 로그 충돌 및 오류 방지를 위해 한 브라우저에서는 하나의 닉네임만 이용하실 수 있습니다.`
           });
           return;
         }
@@ -1434,6 +1481,7 @@ io.on('connection', (socket) => {
     const user = {
       socketId: socket.id,
       userId: resolvedUserId,
+      clientInstanceId: clientInstanceId || null,
       nickname: reqNick,
       avatar: avatar || '🧑‍💻',
       currentRoom: initialRoom,
@@ -2557,6 +2605,15 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (!user) return;
     const clientIp = getClientIp(socket);
+
+    const lockout = checkOperLockout(clientIp);
+    if (lockout.locked) {
+      socket.emit('oper_failed', {
+        message: `운영자 인증 오류 5회 초과로 인해 ${lockout.remainingMinutes}분간 인증이 차단되었습니다.`
+      });
+      return;
+    }
+
     const operId = (data.operId || data.username || data.id || '').trim();
     const operPw = (data.operPw || data.password || data.pw || '').trim();
 
@@ -2578,16 +2635,13 @@ io.on('connection', (socket) => {
       socket.emit('new_message', opAnnounce);
       broadcastUserListDebounced();
     } else {
-      const record = operFailedAttempts.get(clientIp) || { count: 0, lastAttempt: 0 };
-      record.count += 1;
-      record.lastAttempt = Date.now();
-      operFailedAttempts.set(clientIp, record);
-
-      if (record.count >= 10 && record.count % 10 === 0) {
-        console.warn(`[Security Alert] IP ${clientIp} (nick: ${user.nickname}) oper login failed ${record.count} times.`);
-      }
-
-      socket.emit('oper_failed', { message: '운영자 인증에 실패했습니다. (아이디 또는 비밀번호 불일치)' });
+      recordOperFailure(clientIp, user.nickname, 'oper');
+      const curRecord = operFailedAttempts.get(clientIp);
+      const remainingAttempts = Math.max(0, OPER_MAX_FAILED_ATTEMPTS - (curRecord ? curRecord.count : 0));
+      const failMsg = remainingAttempts > 0
+        ? `운영자 인증에 실패했습니다. (아이디 또는 비밀번호 불일치 - 남은 시도: ${remainingAttempts}회)`
+        : `운영자 인증 오류 5회 초과로 인해 15분간 인증이 차단되었습니다.`;
+      socket.emit('oper_failed', { message: failMsg });
     }
   });
 
@@ -2595,11 +2649,22 @@ io.on('connection', (socket) => {
   socket.on('aioper_login', (data) => {
     const user = users.get(socket.id);
     if (!user) return;
+    const clientIp = getClientIp(socket);
+
+    const lockout = checkOperLockout(clientIp);
+    if (lockout.locked) {
+      socket.emit('aioper_failed', {
+        message: `AI 운영자 인증 오류 5회 초과로 인해 ${lockout.remainingMinutes}분간 인증이 차단되었습니다.`
+      });
+      return;
+    }
+
     const operId = (data.operId || data.username || data.id || '').trim().toLowerCase();
     const operPw = (data.operPw || data.password || data.pw || '').trim();
 
     const account = AIOPER_ACCOUNTS[operId];
     if (account && secureCompareStrings(account.pw, operPw)) {
+      operFailedAttempts.delete(clientIp);
       user.isAiOper = true;
       user.aiOperId = operId;
       const oldNick = user.nickname;
@@ -2626,7 +2691,13 @@ io.on('connection', (socket) => {
       broadcastChannelListDebounced();
       broadcastUserListDebounced();
     } else {
-      socket.emit('aioper_failed', { message: 'AI 운영자 인증에 실패했습니다. (아이디 또는 비밀번호 불일치)' });
+      recordOperFailure(clientIp, user.nickname, 'aioper');
+      const curRecord = operFailedAttempts.get(clientIp);
+      const remainingAttempts = Math.max(0, OPER_MAX_FAILED_ATTEMPTS - (curRecord ? curRecord.count : 0));
+      const failMsg = remainingAttempts > 0
+        ? `AI 운영자 인증에 실패했습니다. (아이디 또는 비밀번호 불일치 - 남은 시도: ${remainingAttempts}회)`
+        : `AI 운영자 인증 오류 5회 초과로 인해 15분간 인증이 차단되었습니다.`;
+      socket.emit('aioper_failed', { message: failMsg });
     }
   });
 
@@ -3056,8 +3127,8 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Test helper: simulate mute expiry for multi-strike test suite
-  if (socket.handshake?.headers?.['x-test-client'] === 'true') {
+  // Test helper: simulate mute expiry for multi-strike test suite (only enabled in test environment)
+  if (process.env.NODE_ENV === 'test' && socket.handshake?.headers?.['x-test-client'] === 'true') {
     socket.on('test_clear_mute', () => {
       const clientIp = getClientIp(socket);
       const user = users.get(socket.id);
@@ -3473,7 +3544,38 @@ io.on('connection', (socket) => {
       cleanContent = cleanContent.slice(0, 2000);
     }
 
-    if (!cleanContent && !fileInfo && type !== 'action') {
+    // Strict validation and sanitization of fileInfo when media upload is enabled
+    let validatedFileInfo = null;
+    if (fileInfo && typeof fileInfo === 'object' && ENABLE_MEDIA_UPLOAD) {
+      const url = String(fileInfo.url || '').trim();
+      const baseFile = path.basename(url);
+      const isSafeUrl = /^\/uploads\/[a-zA-Z0-9._-]+$/.test(url) && !url.includes('..');
+      const filePathOnDisk = path.join(UPLOADS_DIR, baseFile);
+      const existsOnDisk = isSafeUrl && fs.existsSync(filePathOnDisk);
+      if (isSafeUrl && existsOnDisk) {
+        const originalName = String(fileInfo.originalName || baseFile).replace(/[\r\n\0]/g, '').slice(0, 255);
+        const mimetype = String(fileInfo.mimetype || 'application/octet-stream').replace(/[^a-zA-Z0-9_\-\.\/]/g, '').slice(0, 64);
+        const allowedTypes = ['image', 'video', 'file', 'audio'];
+        const fileType = allowedTypes.includes(fileInfo.fileType) ? fileInfo.fileType : 'file';
+        const size = Number.isSafeInteger(Number(fileInfo.size)) && Number(fileInfo.size) >= 0 ? Number(fileInfo.size) : 0;
+        validatedFileInfo = {
+          url,
+          filename: baseFile,
+          originalName,
+          mimetype,
+          fileType,
+          size
+        };
+      }
+    }
+
+    // If message type was media but fileInfo is invalid, downgrade type to 'text'
+    let resolvedType = type || 'text';
+    if (['image', 'video', 'file', 'audio'].includes(resolvedType) && !validatedFileInfo) {
+      resolvedType = 'text';
+    }
+
+    if (!cleanContent && !validatedFileInfo && resolvedType !== 'action') {
       return;
     }
 
@@ -3493,8 +3595,8 @@ io.on('connection', (socket) => {
         aiOperId: sender.aiOperId || null
       },
       content: cleanContent,
-      type: type || 'text', // 'text' | 'action' | 'image' | 'video' | 'file'
-      fileInfo: fileInfo || null,
+      type: resolvedType, // 'text' | 'action' | 'image' | 'video' | 'file'
+      fileInfo: validatedFileInfo,
       timestamp: Date.now()
     };
 

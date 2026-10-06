@@ -99,7 +99,31 @@ class NickServ {
   }
 
   hashPassword(password, salt) {
-    return crypto.pbkdf2Sync(password, salt, 10000, 32, 'sha256').toString('hex');
+    // OWASP recommendation: modern scrypt KDF (N=16384, r=8, p=1, 64-byte key)
+    const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `scrypt$${derived}`;
+  }
+
+  verifyStoredHash(password, salt, storedHash) {
+    if (!password || !salt || !storedHash) return false;
+    if (typeof storedHash === 'string' && storedHash.startsWith('scrypt$')) {
+      const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+      const candidate = `scrypt$${derived}`;
+      const b1 = Buffer.from(candidate, 'utf8');
+      const b2 = Buffer.from(storedHash, 'utf8');
+      if (b1.length !== b2.length) return false;
+      return crypto.timingSafeEqual(b1, b2);
+    }
+    // Backward compatibility for legacy PBKDF2 (10,000 iterations)
+    try {
+      const legacyHash = crypto.pbkdf2Sync(password, salt, 10000, 32, 'sha256').toString('hex');
+      const b1 = Buffer.from(legacyHash, 'hex');
+      const b2 = Buffer.from(storedHash, 'hex');
+      if (b1.length !== b2.length) return false;
+      return crypto.timingSafeEqual(b1, b2);
+    } catch (e) {
+      return false;
+    }
   }
 
   generateSalt() {
@@ -229,11 +253,15 @@ class NickServ {
       };
     }
 
-    // Verify hash with timingSafeEqual
-    const inputHash = this.hashPassword(password, record.salt);
-    const match = crypto.timingSafeEqual(Buffer.from(inputHash, 'hex'), Buffer.from(record.hash, 'hex'));
+    // Verify hash with timing-safe comparison
+    const match = this.verifyStoredHash(password, record.salt, record.hash);
 
     if (match) {
+      // Auto-upgrade legacy PBKDF2 hashes to modern scrypt
+      if (typeof record.hash === 'string' && !record.hash.startsWith('scrypt$')) {
+        record.salt = this.generateSalt();
+        record.hash = this.hashPassword(password, record.salt);
+      }
       // Reset attempts on success
       this.loginAttempts.delete(attemptKey);
       record.lastLoginAt = now;
@@ -278,8 +306,7 @@ class NickServ {
     if (!record) {
       return { success: false, message: '* ⚠️ 등록되지 않은 닉네임입니다.' };
     }
-    const oldHash = this.hashPassword(oldPassword, record.salt);
-    if (!crypto.timingSafeEqual(Buffer.from(oldHash, 'hex'), Buffer.from(record.hash, 'hex'))) {
+    if (!this.verifyStoredHash(oldPassword, record.salt, record.hash)) {
       return { success: false, message: '* ⚠️ 기존 비밀번호가 일치하지 않습니다.' };
     }
     if (!newPassword || newPassword.length < 4 || newPassword.length > 64) {
@@ -298,8 +325,7 @@ class NickServ {
     if (!record) {
       return { success: false, message: '* ⚠️ 등록되지 않은 닉네임입니다.' };
     }
-    const oldHash = this.hashPassword(password, record.salt);
-    if (!crypto.timingSafeEqual(Buffer.from(oldHash, 'hex'), Buffer.from(record.hash, 'hex'))) {
+    if (!this.verifyStoredHash(password, record.salt, record.hash)) {
       return { success: false, message: '* ⚠️ 비밀번호가 일치하지 않아 등록을 해제할 수 없습니다.' };
     }
     this.nicks.delete(cleanNick);
