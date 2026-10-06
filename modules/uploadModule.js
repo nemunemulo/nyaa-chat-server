@@ -15,6 +15,8 @@ const multer = require('multer');
 function setupUploadModule(app, options = {}) {
   const enabled = Boolean(options.enabled);
   const uploadsDir = options.uploadsDir || path.join(__dirname, '..', 'uploads');
+  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB per file
+  const MAX_TOTAL_STORAGE = 2 * 1024 * 1024 * 1024; // 2GB total storage cap
 
   const DANGEROUS_EXTENSIONS = new Set([
     '.svg', '.html', '.htm', '.xhtml', '.js', '.mjs', '.exe', '.bat', '.cmd',
@@ -36,6 +38,63 @@ function setupUploadModule(app, options = {}) {
     if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) return 'audio';
     return 'file';
   }
+
+  // Calculate current storage usage
+  function getDirectorySize(dirPath) {
+    let total = 0;
+    try {
+      if (fs.existsSync(dirPath)) {
+        const files = fs.readdirSync(dirPath);
+        for (const f of files) {
+          try {
+            const p = path.join(dirPath, f);
+            const stat = fs.statSync(p);
+            if (stat.isFile()) {
+              total += stat.size;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return total;
+  }
+
+  // IP Rate Limiter for uploads (5/min, 20/hr)
+  const ipUploadRecords = new Map();
+  function checkUploadRateLimit(ip) {
+    const now = Date.now();
+    let rec = ipUploadRecords.get(ip);
+    if (!rec) {
+      rec = { minuteCount: 0, minuteReset: now + 60000, hourCount: 0, hourReset: now + 3600000 };
+      ipUploadRecords.set(ip, rec);
+    }
+    if (now > rec.minuteReset) {
+      rec.minuteCount = 0;
+      rec.minuteReset = now + 60000;
+    }
+    if (now > rec.hourReset) {
+      rec.hourCount = 0;
+      rec.hourReset = now + 3600000;
+    }
+    if (rec.minuteCount >= 5) {
+      return { allowed: false, error: '분당 최대 업로드 횟수(5회)를 초과했습니다. 1분 후 다시 시도하세요.' };
+    }
+    if (rec.hourCount >= 20) {
+      return { allowed: false, error: '시간당 최대 업로드 횟수(20회)를 초과했습니다. 잠시 후 다시 시도하세요.' };
+    }
+    rec.minuteCount++;
+    rec.hourCount++;
+    return { allowed: true };
+  }
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, rec] of ipUploadRecords.entries()) {
+      if (now > rec.hourReset + 3600000) {
+        ipUploadRecords.delete(ip);
+      }
+    }
+  }, 600000).unref();
 
   if (!enabled) {
     // Return 403 Forbidden for any upload attempts when module is disabled
@@ -82,7 +141,7 @@ function setupUploadModule(app, options = {}) {
 
   const upload = multer({
     storage,
-    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
+    limits: { fileSize: MAX_FILE_SIZE },
     fileFilter: (req, file, cb) => {
       const ext = path.extname(file.originalname).toLowerCase();
       if (DANGEROUS_EXTENSIONS.has(ext)) {
@@ -92,29 +151,53 @@ function setupUploadModule(app, options = {}) {
     }
   });
 
-  // Upload API Endpoint
-  app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ error: '파일이 제공되지 않았습니다.' });
+  // Upload API Endpoint with rate limit & storage quota defenses
+  app.post('/api/upload', (req, res) => {
+    const clientIp = (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.socket?.remoteAddress || 'unknown';
+    
+    // 1. IP Rate Limiting
+    const rateCheck = checkUploadRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ success: false, error: rateCheck.error });
     }
 
-    let originalName = req.file.originalname;
-    try {
-      originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-    } catch (e) {}
+    // 2. Total Storage Quota (2GB cap)
+    const currentUsage = getDirectorySize(uploadsDir);
+    if (currentUsage >= MAX_TOTAL_STORAGE) {
+      return res.status(507).json({ success: false, error: '서버 업로드 저장소 용량 한도(2GB)를 초과하여 새 파일을 업로드할 수 없습니다.' });
+    }
 
-    const fileType = getFileType(req.file.mimetype, originalName);
-
-    res.json({
-      success: true,
-      file: {
-        url: `/uploads/${req.file.filename}`,
-        filename: req.file.filename,
-        originalName,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-        fileType
+    // 3. Process File Upload with Multer
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ success: false, error: '파일 크기가 50MB 제한을 초과했습니다.' });
+        }
+        return res.status(400).json({ success: false, error: err.message || '파일 업로드 처리 중 오류가 발생했습니다.' });
       }
+
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: '파일이 제공되지 않았습니다.' });
+      }
+
+      let originalName = req.file.originalname;
+      try {
+        originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      } catch (e) {}
+
+      const fileType = getFileType(req.file.mimetype, originalName);
+
+      res.json({
+        success: true,
+        file: {
+          url: `/uploads/${req.file.filename}`,
+          filename: req.file.filename,
+          originalName,
+          size: req.file.size,
+          mimetype: req.file.mimetype,
+          fileType
+        }
+      });
     });
   });
 

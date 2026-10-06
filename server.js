@@ -13,6 +13,19 @@ const cors = require('cors');
 
 const app = express();
 
+// Global Exception Shield: Prevent process crash from malformed packets
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Robust schema validation helper
+function isSafeObject(obj) {
+  return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+}
+
 // Timing-safe constant-time string comparison to prevent timing attacks
 function secureCompareStrings(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -145,15 +158,22 @@ function getUserIp(userId) {
   return userLastIpMap.get(userId) || '';
 }
 
-// Load or initialize messages
-let messageHistory = {};
+// Load or initialize messages (Object.create(null) prevents prototype pollution)
+let messageHistory = Object.create(null);
 try {
   if (fs.existsSync(MESSAGES_FILE)) {
-    messageHistory = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf-8'));
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) {
+        if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+          messageHistory[k] = Array.isArray(v) ? v : [];
+        }
+      }
+    }
   }
 } catch (e) {
   console.error('Error reading messages file, starting fresh', e);
-  messageHistory = {};
+  messageHistory = Object.create(null);
 }
 
 let saveMessagesTimer = null;
@@ -392,6 +412,7 @@ try {
             c.isOperOnly = true;
             if (!c.icon || c.icon === '#') c.icon = '⚖️';
           }
+          c.operators = [BOT_ID];
           map.set(c.id, c);
         }
       });
@@ -444,7 +465,6 @@ function getSerializedUsers(forUser = null) {
     });
 
     return {
-      socketId: u.socketId,
       userId: u.userId,
       nickname: u.nickname,
       avatar: u.avatar,
@@ -564,8 +584,24 @@ function normalizeChannelId(input) {
   if (!clean.startsWith('#')) clean = '#' + clean;
   // Replace illegal room characters
   clean = clean.replace(/[\s/\\?%*:|"<>]+/g, '_');
+  if (clean.length > 30) clean = clean.slice(0, 30);
   if (clean === '#') clean = '#채널_' + Math.random().toString(36).substring(2, 6);
   return clean;
+}
+
+// Security: Hide secret +k channel password from non-operators
+function getSanitizedModes(modes, isOp = false) {
+  if (!modes || typeof modes !== 'object') return {};
+  const copy = { ...modes };
+  if (!isOp && copy.k) {
+    copy.k = true; // Mask plaintext key
+  }
+  return copy;
+}
+
+function isChannelOperator(channel, userId, isServerOper = false) {
+  if (isServerOper) return true;
+  return Boolean(channel && Array.isArray(channel.operators) && channel.operators.includes(userId));
 }
 
 function getChannel(roomId) {
@@ -1250,6 +1286,10 @@ io.on('connection', (socket) => {
 
   // User Join / Register
   socket.on('user_join', (data) => {
+    if (!isSafeObject(data)) {
+      socket.emit('login_error', { message: '잘못된 접속 요청 형식입니다.' });
+      return;
+    }
     const { userId, nickname, avatar, targetChannel: rawTargetChannel, channelKey, nickpass: rawNickpass } = data;
     const defaultRoom = '#자유대화';
     const rawNick = (nickname || '').trim();
@@ -1336,17 +1376,16 @@ io.on('connection', (socket) => {
     );
 
     if (existingNickUser) {
-      // If same client IP or same clientInstanceId, treat as browser refresh / reconnect: gracefully replace old session
-      const isSameClient = (existingNickUser.clientIp === clientIp) || 
-                           (clientInstanceId && existingNickUser.clientInstanceId === clientInstanceId);
-      if (isSameClient) {
+      // Security: Only verified NickServ owner can reclaim an existing nickname session!
+      if (isRegisteredNick && isNickVerified) {
         const oldSocket = io.sockets.sockets.get(existingNickUser.socketId);
         if (oldSocket) {
-          oldSocket.emit('login_error', { message: '다른 창 또는 새로고침으로 인해 이전 세션이 종료되었습니다.' });
+          oldSocket.emit('login_error', { message: '다른 창 또는 기기에서 동일한 닉네임으로 본인 인증 접속하여 이전 세션이 종료되었습니다.' });
           oldSocket.disconnect(true);
         }
         users.delete(existingNickUser.socketId);
       } else {
+        // Unauthenticated / unregistered: Protect existing active session from being kicked!
         socket.emit('login_error', {
           message: `"${reqNick}" 닉네임은 현재 접속 중인 사용자가 이미 선점하고 있습니다. 다른 닉네임을 입력해 주세요.`
         });
@@ -1570,6 +1609,7 @@ io.on('connection', (socket) => {
 
   // Switch Room (Group Channel or 1:1 DM)
   socket.on('switch_room', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -1691,6 +1731,7 @@ io.on('connection', (socket) => {
       broadcastChannelListDebounced();
       broadcastUserListDebounced();
 
+      const isOp = isChannelOperator(channel, currentUser.userId, currentUser.isServerOper);
       roomMeta = {
         type: 'channel',
         id: channel.id,
@@ -1701,7 +1742,7 @@ io.on('connection', (socket) => {
         operators: channel.operators || [],
         voices: Array.from(channel.voices || []),
         modes: formatModeString(channel.modes),
-        rawModes: channel.modes,
+        rawModes: getSanitizedModes(channel.modes, isOp),
         hasKey: Boolean(channel.modes && channel.modes.k),
         isService: Boolean(channel.isService),
         isOperOnly: Boolean(channel.isOperOnly || isOperChannel(channel))
@@ -1753,6 +1794,7 @@ io.on('connection', (socket) => {
 
   // Channel Creation / Join
   socket.on('join_channel', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -1899,6 +1941,7 @@ io.on('connection', (socket) => {
     broadcastChannelListDebounced();
     broadcastUserListDebounced();
 
+    const isOp = isChannelOperator(channel, currentUser.userId, currentUser.isServerOper);
     const roomMeta = {
       type: 'channel',
       id: channel.id,
@@ -1909,7 +1952,7 @@ io.on('connection', (socket) => {
       operators: channel.operators || [],
       voices: Array.from(channel.voices || []),
       modes: formatModeString(channel.modes),
-      rawModes: channel.modes,
+      rawModes: getSanitizedModes(channel.modes, isOp),
       hasKey: Boolean(channel.modes && channel.modes.k),
       isService: Boolean(channel.isService),
       isOperOnly: Boolean(channel.isOperOnly || isOperChannel(channel))
@@ -1942,6 +1985,7 @@ io.on('connection', (socket) => {
 
   // Channel Topic & Settings Edit (/topic)
   socket.on('set_topic', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -1971,7 +2015,7 @@ io.on('connection', (socket) => {
     }
 
     // If operator provided mode settings via modal:
-    if (isOp && modeSettings) {
+    if (isOp && modeSettings && typeof modeSettings === 'object') {
       if (modeSettings.isPrivate !== undefined) channel.modes.p = Boolean(modeSettings.isPrivate);
       if (modeSettings.isSecret !== undefined) channel.modes.s = Boolean(modeSettings.isSecret);
       if (modeSettings.isInviteOnly !== undefined) channel.modes.i = Boolean(modeSettings.isInviteOnly);
@@ -1999,7 +2043,7 @@ io.on('connection', (socket) => {
       topic: channel.topic,
       changedBy: currentUser.nickname,
       modes: formatModeString(channel.modes),
-      rawModes: channel.modes
+      rawModes: getSanitizedModes(channel.modes, false)
     });
     io.to(channelId).emit('new_message', topicMsg);
     saveMessagesDebounced();
@@ -2007,6 +2051,7 @@ io.on('connection', (socket) => {
 
   // Channel Mode Command (/mode)
   socket.on('set_channel_mode', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2149,6 +2194,7 @@ io.on('connection', (socket) => {
 
   // Invite User to Channel (/invite <nickname> [#channel])
   socket.on('invite_user', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
     const { targetNickname, roomId } = data;
@@ -2214,7 +2260,7 @@ io.on('connection', (socket) => {
   // Get Server Channels for /list command (supports optional search keyword)
   socket.on('get_server_channels', (data) => {
     const currentUser = users.get(socket.id);
-    const keyword = (typeof data === 'string') ? data : (data?.keyword || '');
+    const keyword = (typeof data === 'string') ? data : (isSafeObject(data) ? (data?.keyword || '') : '');
     socket.emit('server_channels_result', getServerChannelList(currentUser, keyword));
   });
 
@@ -2230,7 +2276,7 @@ io.on('connection', (socket) => {
 
     requester.lastActiveTime = Date.now();
 
-    const targetQuery = (typeof data === 'string' ? data : (data?.target || data?.nickname || data?.userId || '')).trim();
+    const targetQuery = (typeof data === 'string' ? data : (isSafeObject(data) ? (data?.target || data?.nickname || data?.userId || '') : '')).trim();
     if (!targetQuery) {
       socket.emit('new_message', {
         id: `sys_${Date.now()}`,
@@ -2285,6 +2331,7 @@ io.on('connection', (socket) => {
 
   // Grant Channel Operator (/op <nickname>)
   socket.on('grant_op', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2363,6 +2410,7 @@ io.on('connection', (socket) => {
 
   // Revoke Channel Operator (/deop <nickname>)
   socket.on('revoke_op', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2432,6 +2480,7 @@ io.on('connection', (socket) => {
 
   // Nickname Change with Online Preemption (/nick)
   socket.on('change_nickname', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2539,6 +2588,7 @@ io.on('connection', (socket) => {
 
   // Part Channel (/part)
   socket.on('part_channel', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2602,6 +2652,7 @@ io.on('connection', (socket) => {
 
   // Server Operator Login (/oper <operId> <operPw>)
   socket.on('oper_login', (data) => {
+    if (!isSafeObject(data)) return;
     const user = users.get(socket.id);
     if (!user) return;
     const clientIp = getClientIp(socket);
@@ -2647,6 +2698,7 @@ io.on('connection', (socket) => {
 
   // AI Operator Login (/aioper <operId> <operPw>)
   socket.on('aioper_login', (data) => {
+    if (!isSafeObject(data)) return;
     const user = users.get(socket.id);
     if (!user) return;
     const clientIp = getClientIp(socket);
@@ -2709,6 +2761,7 @@ io.on('connection', (socket) => {
 
   // Channel Kick User (/kick <nickname> [reason])
   socket.on('kick_user', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser) return;
 
@@ -2820,6 +2873,7 @@ io.on('connection', (socket) => {
 
   // Server Operator Ban User (/ban <nickname> [reason])
   socket.on('ban_user', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser || !currentUser.isServerOper) {
       socket.emit('new_message', {
@@ -2931,6 +2985,7 @@ io.on('connection', (socket) => {
 
   // Server Operator Unban (/unban <ip 또는 닉네임>)
   socket.on('unban_ip', (data) => {
+    if (!isSafeObject(data)) return;
     const currentUser = users.get(socket.id);
     if (!currentUser || !currentUser.isServerOper) {
       socket.emit('new_message', {
@@ -3141,11 +3196,18 @@ io.on('connection', (socket) => {
 
   // Send Message (Text / Action / File)
   socket.on('send_message', (msgData) => {
+    if (!isSafeObject(msgData)) return;
     const sender = users.get(socket.id);
     if (!sender) return;
 
     const { roomId, content, type, fileInfo } = msgData;
-    if (!roomId) return;
+    if (!roomId || typeof roomId !== 'string') return;
+
+    const isChannel = roomId.startsWith('#');
+    const isDm = roomId.startsWith('dm_');
+    if (!isChannel && !isDm) {
+      return; // Reject arbitrary roomIds (e.g. socket.id targeting)
+    }
 
     // NickServ Command Interception (/nickpass, /identify, /register, /unregister)
     const trimmedContent = (content || '').trim();
@@ -3393,49 +3455,62 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const channel = getChannel(roomId);
-    if (channel) initChannelModes(channel);
+    let channel = null;
+    let isOp = false;
+    let hasVoice = false;
 
-    if (channel && channel.isOperOnly && !sender.isServerOper) {
-      socket.emit('new_message', {
-        id: `sys_${Date.now()}`,
-        roomId: sender.currentRoom || '#자유대화',
-        type: 'system',
-        content: `* '${channel.name}' 채널은 관리자 전용 채널입니다. 일반 사용자는 메시지를 작성할 수 없습니다. 🔒`,
-        timestamp: Date.now()
-      });
-      return;
-    }
+    if (isChannel) {
+      channel = getChannel(roomId);
+      if (!channel) {
+        socket.emit('new_message', {
+          id: `sys_${Date.now()}`,
+          roomId: sender.currentRoom || '#자유대화',
+          type: 'system',
+          content: `* 대상 채널('${roomId}')을 찾을 수 없습니다.`,
+          timestamp: Date.now()
+        });
+        return;
+      }
+      initChannelModes(channel);
 
-    // Check +n mode (No external messages)
-    if (channel && channel.modes && channel.modes.n) {
       const isMember = sender.joinedChannels && sender.joinedChannels.has(roomId);
       if (!isMember && !sender.isServerOper) {
         socket.emit('new_message', {
           id: `sys_${Date.now()}`,
           roomId: sender.currentRoom || '#자유대화',
           type: 'system',
-          content: `* [모드 알림] 이 채널은 외부 메시지 금지(+n) 모드입니다. 채널에 입장 후 메시지를 전송하세요.`,
+          content: `* 대화에 참여하려면 먼저 채널에 입장해야 합니다.`,
           timestamp: Date.now()
         });
         return;
       }
-    }
 
-    const isOp = Boolean(channel && Array.isArray(channel.operators) && channel.operators.includes(sender.userId));
-    const hasVoice = Boolean(channel && channel.voices && channel.voices.has(sender.userId));
-
-    // Check +m mode (Moderated channel: only op or voice can speak)
-    if (channel && channel.modes && channel.modes.m) {
-      if (!isOp && !hasVoice && !sender.isServerOper) {
+      if (channel.isOperOnly && !sender.isServerOper) {
         socket.emit('new_message', {
           id: `sys_${Date.now()}`,
-          roomId,
+          roomId: sender.currentRoom || '#자유대화',
           type: 'system',
-          content: `* [모드 알림] 이 채널은 발언권 제한(+m) 모드입니다. 방장(@) 또는 발언권(+v)을 가진 사용자만 대화할 수 있습니다. 🔇`,
+          content: `* '${channel.name}' 채널은 관리자 전용 채널입니다. 일반 사용자는 메시지를 작성할 수 없습니다. 🔒`,
           timestamp: Date.now()
         });
         return;
+      }
+
+      isOp = Boolean(Array.isArray(channel.operators) && channel.operators.includes(sender.userId));
+      hasVoice = Boolean(channel.voices && channel.voices.has(sender.userId));
+
+      // Check +m mode (Moderated channel: only op or voice can speak)
+      if (channel.modes && channel.modes.m) {
+        if (!isOp && !hasVoice && !sender.isServerOper) {
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}`,
+            roomId,
+            type: 'system',
+            content: `* [모드 알림] 이 채널은 발언권 제한(+m) 모드입니다. 방장(@) 또는 발언권(+v)을 가진 사용자만 대화할 수 있습니다. 🔇`,
+            timestamp: Date.now()
+          });
+          return;
+        }
       }
     }
 
@@ -3453,18 +3528,24 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const isDm = roomId.startsWith('dm_');
-
     // Block 1:1 DM if disabled
-    if (!ENABLE_1ON1_DM && (isDm || type === 'dm')) {
-      socket.emit('new_message', {
-        id: `sys_${Date.now()}`,
-        roomId: sender.currentRoom || roomId,
-        type: 'system',
-        content: '* 1:1 대화 기능은 서버 정책에 따라 분리/비활성화되어 있습니다.',
-        timestamp: Date.now()
-      });
-      return;
+    if (isDm) {
+      if (!ENABLE_1ON1_DM || type === 'dm') {
+        if (!ENABLE_1ON1_DM) {
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}`,
+            roomId: sender.currentRoom || roomId,
+            type: 'system',
+            content: '* 1:1 대화 기능은 서버 정책에 따라 분리/비활성화되어 있습니다.',
+            timestamp: Date.now()
+          });
+          return;
+        }
+      }
+      const dmCheck = resolveDmParticipants(roomId, sender.userId);
+      if (!dmCheck) {
+        return; // Sender is not a participant in this DM!
+      }
     }
 
     const clientIp = getClientIp(socket);
@@ -3587,7 +3668,6 @@ io.on('connection', (socket) => {
         userId: sender.userId,
         nickname: sender.nickname,
         avatar: sender.avatar,
-        socketId: socket.id,
         isOp: isOp,
         hasVoice: hasVoice,
         isServerOper: Boolean(sender.isServerOper),
@@ -3693,15 +3773,18 @@ io.on('connection', (socket) => {
 
   // Real-time Typing Indicator
   socket.on('typing', (data) => {
+    if (!isSafeObject(data)) return;
     const user = users.get(socket.id);
     if (!user) return;
     user.lastActiveTime = Date.now();
     const { roomId, isTyping } = data;
+    if (!roomId || typeof roomId !== 'string') return;
+    if (!roomId.startsWith('#') && !roomId.startsWith('dm_')) return;
     socket.to(roomId).emit('user_typing', {
       userId: user.userId,
       nickname: user.nickname,
       roomId,
-      isTyping
+      isTyping: Boolean(isTyping)
     });
   });
 

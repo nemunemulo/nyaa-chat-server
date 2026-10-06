@@ -68,7 +68,7 @@ function extractHostFromUrl(rawUrl) {
   }
 }
 
-function httpJsonRequest(targetUrl, method = 'GET', bodyObj = null, timeoutMs = 5000) {
+function httpJsonRequest(targetUrl, method = 'GET', bodyObj = null, timeoutMs = 5000, customHeaders = null) {
   return new Promise((resolve, reject) => {
     try {
       const parsed = new URL(targetUrl);
@@ -88,6 +88,10 @@ function httpJsonRequest(targetUrl, method = 'GET', bodyObj = null, timeoutMs = 
         },
         timeout: timeoutMs
       };
+
+      if (customHeaders && typeof customHeaders === 'object') {
+        Object.assign(options.headers, customHeaders);
+      }
 
       if (payloadStr) {
         options.headers['Content-Type'] = 'application/json; charset=utf-8';
@@ -483,7 +487,9 @@ function setupPeerDirectoryModule({
             sender: selfSnap,
             directory: getFullDirectoryList()
           };
-          const res = await httpJsonRequest(`${peerUrl}/api/peer-sync`, 'POST', syncPayload, 4500);
+          const peerSecret = (process.env.PEER_SYNC_SECRET || '').trim();
+          const syncHeaders = peerSecret ? { 'x-peer-token': peerSecret } : null;
+          const res = await httpJsonRequest(`${peerUrl}/api/peer-sync`, 'POST', syncPayload, 4500, syncHeaders);
           if (res && res.server) {
             mergePeerSnapshot(res.server, true);
           }
@@ -542,6 +548,15 @@ function setupPeerDirectoryModule({
 
   // Mutual Backup Gossip Endpoint (Strictly Whitelist-Protected & Reverse-Verified!)
   app.post('/api/peer-sync', express.json({ limit: '256kb' }), async (req, res) => {
+    // 1. Optional Token Authentication for Peer Sync
+    const requiredPeerSecret = (process.env.PEER_SYNC_SECRET || '').trim();
+    if (requiredPeerSecret) {
+      const providedToken = (req.headers['x-peer-token'] || req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+      if (!providedToken || providedToken !== requiredPeerSecret) {
+        return res.status(401).json({ error: 'PEER_AUTH_REQUIRED', message: '피어 동기화 인증 토큰이 필요하거나 올바르지 않습니다.' });
+      }
+    }
+
     const body = req.body || {};
     const sender = body.sender;
 
@@ -573,7 +588,12 @@ function setupPeerDirectoryModule({
       body.directory.forEach((entry) => {
         if (entry && entry.serverUrl && isUrlWhitelisted(entry.serverUrl)) {
           const isDirectSender = normalizeServerUrl(entry.serverUrl) === normSenderUrl;
-          mergePeerSnapshot(entry, isDirectSender ? true : Boolean(entry.isOnline));
+          if (isDirectSender) {
+            mergePeerSnapshot(entry, true);
+          } else {
+            // Security: 3rd-party claims cannot force isOnline = true without direct verification
+            mergePeerSnapshot(entry, false);
+          }
         }
       });
     }
