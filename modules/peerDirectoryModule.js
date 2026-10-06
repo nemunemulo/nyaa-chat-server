@@ -676,6 +676,19 @@ function setupPeerDirectoryModule({
       }
 
       const targetRoom = data.roomId || user.currentRoom || '#자유대화';
+      if (targetRoom.startsWith('#')) {
+        const isMember = user.joinedChannels && user.joinedChannels.has(targetRoom);
+        if (!isMember && !user.isServerOper) {
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            roomId: user.currentRoom || '#자유대화',
+            type: 'system',
+            content: `* 자신이 참여하지 않은 채널(${targetRoom})에는 명령어를 실행할 수 없습니다.`,
+            timestamp: Date.now()
+          });
+          return;
+        }
+      }
       const argsText = String(data.args || '').trim();
       let replyTemplate = matched.response || `🤖 [${serverConfig.serverName}] $nick님이 /${rawCmd} 명령어를 실행했습니다.`;
 

@@ -1,5 +1,7 @@
 const express = require('express');
 const http = require('http');
+const net = require('net');
+const dns = require('dns').promises;
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
@@ -389,6 +391,8 @@ const DEFAULT_CHANNELS = [
   }
 ];
 
+const MAX_USER_JOINED_CHANNELS = 25;
+const MAX_SERVER_CUSTOM_CHANNELS = 150;
 let channelList = [...DEFAULT_CHANNELS];
 try {
   if (fs.existsSync(CHANNELS_FILE)) {
@@ -458,11 +462,24 @@ function getSerializedUsers(forUser = null) {
       return false;
     });
 
+    // Security: Mask currentRoom if it is a secret (+s) or private (+p) channel and requester is not oper / not member
+    let userCurrentRoom = u.currentRoom;
+    if (userCurrentRoom && userCurrentRoom.startsWith('#')) {
+      const curCh = getChannel(userCurrentRoom);
+      if (curCh && curCh.modes && (curCh.modes.s || curCh.modes.p)) {
+        const canSee = (forUser && forUser.isServerOper) ||
+                       (forUser && forUser.joinedChannels && forUser.joinedChannels.has(userCurrentRoom));
+        if (!canSee) {
+          userCurrentRoom = null;
+        }
+      }
+    }
+
     return {
       userId: u.userId,
       nickname: u.nickname,
       avatar: u.avatar,
-      currentRoom: u.currentRoom,
+      currentRoom: userCurrentRoom,
       joinedChannels: joined,
       isBot: Boolean(u.isBot),
       isOp: Boolean(u.isOp),
@@ -876,58 +893,114 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// SSRF Guard: check if a hostname is private or local/reserved IP
-function isPrivateOrReservedIp(hostname) {
-  if (!hostname) return true;
-  const host = hostname.toLowerCase().trim();
+// SSRF Deep Defense: Comprehensive IP range check (IPv4 and IPv6)
+function isPrivateOrReservedIpAddress(ipStr) {
+  if (!ipStr || typeof ipStr !== 'string') return true;
+  const ip = ipStr.trim().toLowerCase();
+  const cleanIp = ip.replace(/^\[|\]$/g, '');
 
-  // Localhost aliases & IPv6 loopback
-  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' || host === '[::1]') {
-    return true;
-  }
-
-  // IPv4 range checks
-  const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-  const match = host.match(ipv4Regex);
-  if (match) {
-    const [, o1, o2] = match.map(Number);
-    if (o1 === 10) return true; // 10.0.0.0/8
-    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true; // 172.16.0.0/12
-    if (o1 === 192 && o2 === 168) return true; // 192.168.0.0/16
-    if (o1 === 169 && o2 === 254) return true; // 169.254.0.0/16 (Link-Local & Cloud Metadata)
-    if (o1 === 127) return true; // 127.0.0.0/8
+  // 1. IPv4 Checks
+  if (net.isIPv4(cleanIp)) {
+    const parts = cleanIp.split('.').map(Number);
+    const [o1, o2, o3, o4] = parts;
     if (o1 === 0) return true; // 0.0.0.0/8
-    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // 100.64.0.0/10
+    if (o1 === 10) return true; // 10.0.0.0/8 (Private)
+    if (o1 === 127) return true; // 127.0.0.0/8 (Loopback)
+    if (o1 === 169 && o2 === 254) return true; // 169.254.0.0/16 (Link-Local & Cloud Metadata)
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true; // 172.16.0.0/12 (Private)
+    if (o1 === 192 && o2 === 168) return true; // 192.168.0.0/16 (Private)
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // 100.64.0.0/10 (Carrier-Grade NAT)
+    if (o1 === 192 && o2 === 0 && o3 === 0) return true; // 192.0.0.0/24
+    if (o1 === 192 && o2 === 0 && o3 === 2) return true; // 192.0.2.0/24 (TEST-NET-1)
+    if (o1 === 198 && o2 === 51 && o3 === 100) return true; // 198.51.100.0/24 (TEST-NET-2)
+    if (o1 === 203 && o2 === 0 && o3 === 113) return true; // 203.0.113.0/24 (TEST-NET-3)
+    if (o1 >= 224 && o1 <= 239) return true; // 224.0.0.0/4 (Multicast)
+    if (o1 >= 240) return true; // 240.0.0.0/4 (Reserved / Broadcast)
+    return false;
   }
 
-  // Block internal domain suffixes
-  if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.lan') || host.endsWith('.localdomain')) {
+  // 2. IPv6 Checks
+  if (net.isIPv6(cleanIp)) {
+    if (cleanIp === '::1' || cleanIp === '::') return true;
+
+    // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+    if (cleanIp.startsWith('::ffff:') || cleanIp.startsWith('0:0:0:0:0:ffff:')) {
+      const mappedIpv4 = cleanIp.replace(/^.*ffff:/i, '');
+      if (net.isIPv4(mappedIpv4)) {
+        return isPrivateOrReservedIpAddress(mappedIpv4);
+      }
+      return true;
+    }
+
+    // Unique Local (fc00::/7 -> fc00..fdff)
+    if (/^f[cd][0-9a-f]{2}:/i.test(cleanIp)) return true;
+
+    // Link-Local (fe80::/10 -> fe80..febf)
+    if (/^fe[89ab][0-9a-f]:/i.test(cleanIp)) return true;
+
+    // Multicast (ff00::/8)
+    if (/^ff[0-9a-f]{2}:/i.test(cleanIp)) return true;
+
+    // Discard prefix (100::/64), Documentation (2001:db8::/32), IPv4/IPv6 translation (64:ff9b::/96)
+    if (cleanIp.startsWith('100:') || cleanIp.startsWith('2001:db8:') || cleanIp.startsWith('64:ff9b:')) return true;
+
+    return false;
+  }
+
+  return true;
+}
+
+// Full DNS resolution check to prevent DNS Rebinding and SSRF
+async function isSafePublicUrl(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const hostname = parsed.hostname.toLowerCase().trim();
+    if (!hostname) return false;
+
+    // Localhost aliases & internal domain suffixes
+    if (hostname === 'localhost' || hostname.endsWith('.localhost') ||
+        hostname.endsWith('.local') || hostname.endsWith('.internal') ||
+        hostname.endsWith('.lan') || hostname.endsWith('.localdomain') ||
+        hostname.endsWith('.home.arpa')) {
+      return false;
+    }
+
+    // Direct IP address
+    if (net.isIP(hostname)) {
+      return !isPrivateOrReservedIpAddress(hostname);
+    }
+
+    // Resolve DNS (A and AAAA records) and verify all resolved IPs
+    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (!records || records.length === 0) return false;
+
+    for (const record of records) {
+      if (isPrivateOrReservedIpAddress(record.address)) {
+        return false;
+      }
+    }
+
     return true;
+  } catch (_) {
+    return false;
   }
-
-  return false;
 }
 
 // Link Preview Cache & Helper (YouTube, Steam, and Web)
 const linkPreviewCache = new Map();
 
 async function getLinkPreview(rawUrl) {
-  if (!rawUrl) return null;
-  const cleanUrl = rawUrl.replace(/[.,!?:;)]+$/, '');
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const cleanUrl = rawUrl.replace(/[.,!?:;)]+$/, '').trim();
+  if (!cleanUrl) return null;
   if (linkPreviewCache.has(cleanUrl)) {
     return linkPreviewCache.get(cleanUrl);
   }
 
-  // SSRF Validation: Validate URL scheme and block private/local addresses
-  try {
-    const parsed = new URL(cleanUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return null;
-    }
-    if (isPrivateOrReservedIp(parsed.hostname)) {
-      return null;
-    }
-  } catch (e) {
+  // SSRF Validation: Pre-validate initial URL and its resolved IPs
+  if (!(await isSafePublicUrl(cleanUrl))) {
     return null;
   }
 
@@ -1007,22 +1080,42 @@ async function getLinkPreview(rawUrl) {
       }
     }
 
-    // 3. Generic OpenGraph Fallback
+    // 3. Generic OpenGraph Fallback (with safe manual redirect loop & per-hop SSRF validation)
     if (!result) {
       try {
-        const res = await fetch(cleanUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(3000),
-          redirect: 'follow'
-        });
-        if (res.ok) {
-          // Verify final redirected URL is not internal
-          if (res.url) {
-            try {
-              const finalHost = new URL(res.url).hostname;
-              if (isPrivateOrReservedIp(finalHost)) return null;
-            } catch (e) { return null; }
+        let currentUrl = cleanUrl;
+        let redirectsCount = 0;
+        let res = null;
+
+        while (redirectsCount <= 3) {
+          if (!(await isSafePublicUrl(currentUrl))) {
+            return null;
           }
+          res = await fetch(currentUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            signal: AbortSignal.timeout(3000),
+            redirect: 'manual'
+          });
+
+          if (res.status >= 300 && res.status < 400) {
+            const location = res.headers.get('location');
+            if (!location) {
+              res = null;
+              break;
+            }
+            try {
+              currentUrl = new URL(location, currentUrl).href;
+            } catch (_) {
+              res = null;
+              break;
+            }
+            redirectsCount++;
+          } else {
+            break;
+          }
+        }
+
+        if (res && res.ok) {
           // Read up to 64KB to avoid memory exhaustion (DoS)
           let html = '';
           if (res.body && typeof res.body.getReader === 'function') {
@@ -1081,8 +1174,33 @@ async function getLinkPreview(rawUrl) {
   return result;
 }
 
+// Rate Limiting for /api/link-preview (Max 15 requests per 10s per IP)
+const linkPreviewRateMap = new Map();
+function checkLinkPreviewRate(ip) {
+  if (!ip) return true;
+  const now = Date.now();
+  let timestamps = linkPreviewRateMap.get(ip) || [];
+  timestamps = timestamps.filter(t => (now - t) < 10000);
+  if (timestamps.length >= 15) return false;
+  timestamps.push(now);
+  linkPreviewRateMap.set(ip, timestamps);
+  return true;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of linkPreviewRateMap.entries()) {
+    const valid = timestamps.filter(t => (now - t) < 10000);
+    if (valid.length === 0) linkPreviewRateMap.delete(ip);
+    else linkPreviewRateMap.set(ip, valid);
+  }
+}, 5 * 60 * 1000);
+
 // Link Preview REST API Endpoint
 app.get('/api/link-preview', async (req, res) => {
+  const rawIp = (req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  if (!checkLinkPreviewRate(rawIp)) {
+    return res.status(429).json({ error: '요청 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요.' });
+  }
   const targetUrl = req.query.url;
   if (!targetUrl) return res.status(400).json({ error: 'URL is required' });
   const preview = await getLinkPreview(targetUrl);
@@ -1623,6 +1741,40 @@ io.on('connection', (socket) => {
 
     if (targetType === 'channel') {
       newRoomId = normalizeChannelId(targetId);
+      const isAlreadyJoined = currentUser.joinedChannels && currentUser.joinedChannels.has(newRoomId);
+
+      // Anti-Spam: Join Flood Rate Limiting when switching to a channel not yet joined
+      if (!isAlreadyJoined) {
+        const clientIp = getClientIp(socket);
+        const floodCheck = antiSpam.checkJoinFlood(currentUser, clientIp);
+        if (!floodCheck.allowed) {
+          console.warn(`[Join Flood: switch_room] Socket ${socket.id} (${clientIp}, ${currentUser.nickname}) exceeded join rate: ${floodCheck.action} (Strike ${floodCheck.strikeCount}/3)`);
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}`,
+            roomId: currentUser.currentRoom || '#자유대화',
+            type: 'system',
+            content: floodCheck.reason,
+            timestamp: Date.now()
+          });
+          setTimeout(() => {
+            try { socket.disconnect(true); } catch (_) {}
+          }, 50);
+          return;
+        }
+
+        // Limit maximum channels a user can join simultaneously
+        if (currentUser.joinedChannels && currentUser.joinedChannels.size >= MAX_USER_JOINED_CHANNELS && !currentUser.isServerOper) {
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}`,
+            roomId: currentUser.currentRoom || '#자유대화',
+            type: 'system',
+            content: `* 참여 가능한 최대 채널 수(${MAX_USER_JOINED_CHANNELS}개)를 초과했습니다. /part 명령어로 다른 채널에서 먼저 퇴장해주세요.`,
+            timestamp: Date.now()
+          });
+          return;
+        }
+      }
+
       let channel = getChannel(newRoomId);
 
       // Check oper-only channel access
@@ -1690,6 +1842,18 @@ io.on('connection', (socket) => {
       }
 
       if (!channel) {
+        // Enforce server-wide custom channel limit
+        if (channelList.length >= MAX_SERVER_CUSTOM_CHANNELS && !currentUser.isServerOper) {
+          socket.emit('new_message', {
+            id: `sys_${Date.now()}`,
+            roomId: currentUser.currentRoom || '#자유대화',
+            type: 'system',
+            content: `* 서버 전체 채널 수 제한(${MAX_SERVER_CUSTOM_CHANNELS}개)에 도달하여 새로운 채널을 생성할 수 없습니다.`,
+            timestamp: Date.now()
+          });
+          return;
+        }
+
         const isOperTarget = isOperChannelName(newRoomId);
         if (isOperTarget && !currentUser.isServerOper) {
           socket.emit('new_message', {
@@ -1824,6 +1988,18 @@ io.on('connection', (socket) => {
     const channelName = normalizeChannelId(rawChanName);
     if (!channelName || channelName === '#') return;
 
+    const isAlreadyMember = currentUser.joinedChannels && currentUser.joinedChannels.has(channelName);
+    if (!isAlreadyMember && currentUser.joinedChannels && currentUser.joinedChannels.size >= MAX_USER_JOINED_CHANNELS && !currentUser.isServerOper) {
+      socket.emit('new_message', {
+        id: `sys_${Date.now()}`,
+        roomId: currentUser.currentRoom || '#자유대화',
+        type: 'system',
+        content: `* 참여 가능한 최대 채널 수(${MAX_USER_JOINED_CHANNELS}개)를 초과했습니다. /part 명령어로 다른 채널에서 먼저 퇴장해주세요.`,
+        timestamp: Date.now()
+      });
+      return;
+    }
+
     const rawTopic = typeof data.topic === 'string' ? data.topic.trim() : '';
     const topic = (rawTopic || `${channelName} 대화방에 오신 것을 환영합니다.`).slice(0, 80);
 
@@ -1895,6 +2071,17 @@ io.on('connection', (socket) => {
 
     let isNew = false;
     if (!channel) {
+      if (channelList.length >= MAX_SERVER_CUSTOM_CHANNELS && !currentUser.isServerOper) {
+        socket.emit('new_message', {
+          id: `sys_${Date.now()}`,
+          roomId: currentUser.currentRoom || '#자유대화',
+          type: 'system',
+          content: `* 서버 전체 채널 수 제한(${MAX_SERVER_CUSTOM_CHANNELS}개)에 도달하여 새로운 채널을 생성할 수 없습니다.`,
+          timestamp: Date.now()
+        });
+        return;
+      }
+
       const isOperTarget = isOperChannelName(channelName);
       if (isOperTarget && !currentUser.isServerOper) {
         socket.emit('new_message', {
@@ -2623,13 +2810,15 @@ io.on('connection', (socket) => {
     if (!currentUser) return;
     const rawChanId = typeof data.channelId === 'string' ? data.channelId.trim() : '';
     const targetRoom = rawChanId || currentUser.currentRoom;
-    if (targetRoom && targetRoom !== '#자유대화') {
-      socket.to(targetRoom).emit('user_typing', {
-        userId: currentUser.userId,
-        nickname: currentUser.nickname,
-        roomId: targetRoom,
-        isTyping: false
-      });
+    if (!targetRoom || targetRoom === '#자유대화') return;
+    if (!currentUser.joinedChannels || !currentUser.joinedChannels.has(targetRoom)) return;
+
+    socket.to(targetRoom).emit('user_typing', {
+      userId: currentUser.userId,
+      nickname: currentUser.nickname,
+      roomId: targetRoom,
+      isTyping: false
+    });
 
       const channel = getChannel(targetRoom);
       const isOp = channel && Array.isArray(channel.operators) && channel.operators.includes(currentUser.userId);
@@ -2677,7 +2866,6 @@ io.on('connection', (socket) => {
 
       broadcastChannelListDebounced();
       broadcastUserListDebounced();
-    }
   });
 
   // Server Operator Login (/oper <operId> <operPw>)
@@ -3787,6 +3975,15 @@ io.on('connection', (socket) => {
     const { roomId, isTyping } = data;
     if (!roomId || typeof roomId !== 'string') return;
     if (!roomId.startsWith('#') && !roomId.startsWith('dm_')) return;
+
+    // Verify room membership before broadcasting typing event
+    if (roomId.startsWith('#')) {
+      if (!user.joinedChannels || !user.joinedChannels.has(roomId)) return;
+    } else if (roomId.startsWith('dm_')) {
+      const parts = resolveDmParticipants(roomId, user.userId);
+      if (!parts || (parts.user1 !== user.userId && parts.user2 !== user.userId)) return;
+    }
+
     socket.to(roomId).emit('user_typing', {
       userId: user.userId,
       nickname: user.nickname,

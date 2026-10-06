@@ -234,6 +234,91 @@ async function runTests() {
   assert(peerSyncRes.body.includes('PEER_SYNC_DISABLED'), 'Peer sync body must indicate PEER_SYNC_DISABLED');
   console.log('✔ /api/peer-sync returned HTTP 503 PEER_SYNC_DISABLED when PEER_SYNC_SECRET is unset!');
 
+  console.log('\n--- Test 10: SSRF Defense & /api/link-preview Rate Limiting ---');
+  const checkSsrfUrl = async (target) => {
+    return new Promise((resolve) => {
+      const req = http.get(`${SERVER_URL}/api/link-preview?url=${encodeURIComponent(target)}`, (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => resolve({ status: res.statusCode, data }));
+      });
+      req.on('error', () => resolve({ status: 500, data: '' }));
+    });
+  };
+
+  const ssrf1 = await checkSsrfUrl('http://127.0.0.1:3099/api/peer-sync');
+  assert.strictEqual(ssrf1.status, 404, 'SSRF request to 127.0.0.1 must be rejected with 404!');
+
+  const ssrf2 = await checkSsrfUrl('http://localhost:3099/');
+  assert.strictEqual(ssrf2.status, 404, 'SSRF request to localhost must be rejected with 404!');
+
+  const ssrf3 = await checkSsrfUrl('http://169.254.169.254/latest/meta-data');
+  assert.strictEqual(ssrf3.status, 404, 'SSRF request to link-local metadata must be rejected with 404!');
+
+  const ssrf4 = await checkSsrfUrl('http://192.168.1.1/');
+  assert.strictEqual(ssrf4.status, 404, 'SSRF request to private IPv4 must be rejected with 404!');
+  console.log('✔ SSRF protection successfully blocked 127.0.0.1, localhost, 169.254.x.x, 192.168.x.x!');
+
+  // Test link preview rate limiting (15 requests max per 10s)
+  let rateLimited = false;
+  for (let i = 0; i < 20; i++) {
+    const res = await checkSsrfUrl(`http://127.0.0.1:3099/dummy_${i}`);
+    if (res.status === 429) {
+      rateLimited = true;
+      break;
+    }
+  }
+  assert.strictEqual(rateLimited, true, '/api/link-preview must enforce rate limiting (HTTP 429)!');
+  console.log('✔ /api/link-preview IP rate limiting triggered HTTP 429 as expected!');
+
+  console.log('\n--- Test 11: Secret (+s) Channel currentRoom Masking in User List ---');
+  const secretChan = '#topsecret_' + Date.now().toString(36);
+  client1.emit('join_channel', { channelName: secretChan });
+  await delay(300);
+  client1.emit('set_channel_mode', { roomId: secretChan, modeStr: '+s' });
+  await delay(300);
+
+  // Set up listener for Eve before Alice switches room
+  const userListPromise = new Promise((resolve) => {
+    clientEve.once('user_list_update', (uList) => {
+      resolve(uList);
+    });
+  });
+
+  // Client 1 switches into secretChan, triggering broadcastUserListDebounced
+  client1.emit('switch_room', { targetType: 'channel', targetId: secretChan });
+  const eveSeenUsers = await userListPromise;
+
+  const aliceInEveView = eveSeenUsers.find(u => u.nickname === 'TesterAlice');
+  assert(aliceInEveView, 'TesterAlice must be present in user list');
+  assert.strictEqual(aliceInEveView.currentRoom, null, 'Secret (+s) currentRoom must be masked to null for non-members!');
+  assert(!aliceInEveView.joinedChannels.includes(secretChan), 'Secret (+s) channel name must NOT be leaked in joinedChannels!');
+  console.log('✔ Secret channel (+s) name completely masked in user list (currentRoom: null, joinedChannels: clean)!');
+
+  console.log('\n--- Test 12: Room Membership Verification in part_channel & typing ---');
+  let aliceSawFakePart = false;
+  client1.on('new_message', (msg) => {
+    if (msg.roomId === secretChan && msg.content.includes('퇴장하셨습니다')) {
+      aliceSawFakePart = true;
+    }
+  });
+
+  let aliceSawFakeTyping = false;
+  client1.on('user_typing', (t) => {
+    if (t.roomId === secretChan && t.nickname === 'TesterEve') {
+      aliceSawFakeTyping = true;
+    }
+  });
+
+  // Eve attempts to spoof part_channel and typing in secretChan without being in it
+  clientEve.emit('part_channel', { channelId: secretChan });
+  clientEve.emit('typing', { roomId: secretChan, isTyping: true });
+  await delay(400);
+
+  assert.strictEqual(aliceSawFakePart, false, 'part_channel from unjoined user must be ignored!');
+  assert.strictEqual(aliceSawFakeTyping, false, 'typing from unjoined user must be ignored!');
+  console.log('✔ Unjoined room part_channel & typing spoofing successfully blocked!');
+
   console.log('\n🎉 ALL SECURITY PATCH TESTS PASSED SUCCESSFULLY! 🎉\n');
 
   client1.disconnect();
