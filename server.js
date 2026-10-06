@@ -5,7 +5,6 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { safeAtomicWriteFile, safeAtomicWriteFileSync } = require('./modules/fsSafe');
-const { setupUploadModule } = require('./modules/uploadModule');
 const { setupDmModule } = require('./modules/dmModule');
 const { setupPeerDirectoryModule } = require('./modules/peerDirectoryModule');
 const antiSpam = require('./modules/antiSpam');
@@ -49,10 +48,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Feature Flag: Media and File Upload Support
-// Default: false (Separated and disabled for lightweight RAM & resource optimization)
-const ENABLE_MEDIA_UPLOAD = process.env.ENABLE_MEDIA_UPLOAD === 'true';
-
 // Feature Flag: 1:1 Direct Message Support
 // Default: false (Separated and disabled per user policy)
 const ENABLE_1ON1_DM = process.env.ENABLE_1ON1_DM === 'true';
@@ -62,18 +57,16 @@ const serverStartTime = Date.now();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: ENABLE_MEDIA_UPLOAD ? 1e8 : 1e6 // 1MB for text chat, 100MB if media enabled
+  maxHttpBufferSize: 1e6 // 1MB buffer for lightweight IRC text chat
 });
 
 const PORT = process.env.PORT || 3000;
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 const CHANNELS_FILE = path.join(DATA_DIR, 'channels.json');
 const BANNED_IPS_FILE = path.join(DATA_DIR, 'banned_ips.json');
 
 // Ensure directories exist
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // IP Ban Storage & Metadata
@@ -863,12 +856,6 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Separated Media & File Upload Module (Disabled by default)
-const uploadModule = setupUploadModule(app, {
-  enabled: ENABLE_MEDIA_UPLOAD,
-  uploadsDir: UPLOADS_DIR
-});
-
 // Separated 1:1 Direct Message Module (Disabled by default)
 const dmModule = setupDmModule(io, {
   enabled: ENABLE_1ON1_DM
@@ -877,7 +864,6 @@ const dmModule = setupDmModule(io, {
 // Config API Endpoint
 app.get('/api/config', (req, res) => {
   res.json({
-    mediaUploadEnabled: ENABLE_MEDIA_UPLOAD,
     dmEnabled: ENABLE_1ON1_DM,
     antiSpam: {
       windowSeconds: 5,
@@ -1553,7 +1539,6 @@ io.on('connection', (socket) => {
       channels: getChannelListWithUserCounts(user),
       users: getSerializedUsers(user),
       history: [],
-      mediaUploadEnabled: ENABLE_MEDIA_UPLOAD,
       dmEnabled: ENABLE_1ON1_DM,
       serverInfo: peerDirectory.getServerInfo()
     });
@@ -3200,7 +3185,7 @@ io.on('connection', (socket) => {
     const sender = users.get(socket.id);
     if (!sender) return;
 
-    const { roomId, content, type, fileInfo } = msgData;
+    const { roomId, content, type } = msgData;
     if (!roomId || typeof roomId !== 'string') return;
 
     const isChannel = roomId.startsWith('#');
@@ -3516,18 +3501,6 @@ io.on('connection', (socket) => {
 
     sender.lastActiveTime = Date.now();
 
-    // Block image/video/file uploads if media upload is disabled
-    if (!ENABLE_MEDIA_UPLOAD && (fileInfo || ['image', 'video', 'file'].includes(type))) {
-      socket.emit('new_message', {
-        id: `sys_${Date.now()}`,
-        roomId: sender.currentRoom || roomId,
-        type: 'system',
-        content: '* 이미지, 동영상 및 파일 업로드 기능은 서버 정책에 따라 지원하지 않습니다.',
-        timestamp: Date.now()
-      });
-      return;
-    }
-
     // Block 1:1 DM if disabled
     if (isDm) {
       if (!ENABLE_1ON1_DM || type === 'dm') {
@@ -3625,38 +3598,8 @@ io.on('connection', (socket) => {
       cleanContent = cleanContent.slice(0, 2000);
     }
 
-    // Strict validation and sanitization of fileInfo when media upload is enabled
-    let validatedFileInfo = null;
-    if (fileInfo && typeof fileInfo === 'object' && ENABLE_MEDIA_UPLOAD) {
-      const url = String(fileInfo.url || '').trim();
-      const baseFile = path.basename(url);
-      const isSafeUrl = /^\/uploads\/[a-zA-Z0-9._-]+$/.test(url) && !url.includes('..');
-      const filePathOnDisk = path.join(UPLOADS_DIR, baseFile);
-      const existsOnDisk = isSafeUrl && fs.existsSync(filePathOnDisk);
-      if (isSafeUrl && existsOnDisk) {
-        const originalName = String(fileInfo.originalName || baseFile).replace(/[\r\n\0]/g, '').slice(0, 255);
-        const mimetype = String(fileInfo.mimetype || 'application/octet-stream').replace(/[^a-zA-Z0-9_\-\.\/]/g, '').slice(0, 64);
-        const allowedTypes = ['image', 'video', 'file', 'audio'];
-        const fileType = allowedTypes.includes(fileInfo.fileType) ? fileInfo.fileType : 'file';
-        const size = Number.isSafeInteger(Number(fileInfo.size)) && Number(fileInfo.size) >= 0 ? Number(fileInfo.size) : 0;
-        validatedFileInfo = {
-          url,
-          filename: baseFile,
-          originalName,
-          mimetype,
-          fileType,
-          size
-        };
-      }
-    }
-
-    // If message type was media but fileInfo is invalid, downgrade type to 'text'
-    let resolvedType = type || 'text';
-    if (['image', 'video', 'file', 'audio'].includes(resolvedType) && !validatedFileInfo) {
-      resolvedType = 'text';
-    }
-
-    if (!cleanContent && !validatedFileInfo && resolvedType !== 'action') {
+    const resolvedType = type === 'action' ? 'action' : 'text';
+    if (!cleanContent && resolvedType !== 'action') {
       return;
     }
 
@@ -3675,8 +3618,7 @@ io.on('connection', (socket) => {
         aiOperId: sender.aiOperId || null
       },
       content: cleanContent,
-      type: resolvedType, // 'text' | 'action' | 'image' | 'video' | 'file'
-      fileInfo: validatedFileInfo,
+      type: resolvedType, // 'text' | 'action'
       timestamp: Date.now()
     };
 

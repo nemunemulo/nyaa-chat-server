@@ -10,7 +10,6 @@ const assert = require('assert');
 const PORT = 3099;
 process.env.PORT = PORT;
 process.env.NODE_ENV = 'test';
-process.env.ENABLE_MEDIA_UPLOAD = 'true';
 process.env.ENABLE_1ON1_DM = 'true';
 
 console.log('🚀 Starting test NyaaChat Server on port', PORT);

@@ -1,7 +1,7 @@
 {
   "name": "nyaachat",
   "version": "1.0.0",
-  "description": "Real-time multimedia 1:1 and multi-user chat application",
+  "description": "Ultra-lightweight IRC-style multi-server real-time chat application",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,8 +10,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "mime-types": "^2.1.35",
-    "multer": "^2.4.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

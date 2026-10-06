@@ -1,12 +1,10 @@
 # Dependencies
 node_modules/
 
-# User uploads (keep directory structure)
-uploads/*
-!uploads/.gitkeep
-
 # Dynamic runtime data files (ephemeral / runtime DB)
 data/*.json
+data/*.key
+data/oper_secret.key
 data/peers_whitelist.txt
 !data/.gitkeep
 !data/peers_whitelist.example.txt
@@ -14,6 +12,7 @@ data/peers_whitelist.txt
 # Environment and secrets
 .env
 *.env
+*.key
 
 # Logs and OS files
 *.log

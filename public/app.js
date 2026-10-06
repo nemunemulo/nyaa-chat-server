@@ -45,33 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatInputForm = document.getElementById('chatInputForm');
   const messageInput = document.getElementById('messageInput');
   const sendBtn = document.getElementById('sendBtn');
-  const attachBtn = document.getElementById('attachBtn');
-  const fileInputElement = document.getElementById('fileInputElement');
-  const attachmentPreviewBar = document.getElementById('attachmentPreviewBar');
-  const attachIconPreview = document.getElementById('attachIconPreview');
-  const attachFileName = document.getElementById('attachFileName');
-  const attachFileSize = document.getElementById('attachFileSize');
-  const removeAttachBtn = document.getElementById('removeAttachBtn');
-  const uploadProgressBar = document.getElementById('uploadProgressBar');
-  const progressFill = document.getElementById('progressFill');
-  const dragDropOverlay = document.getElementById('dragDropOverlay');
-
-  const toggleGalleryBtn = document.getElementById('toggleGalleryBtn');
-  const mediaCountBadge = document.getElementById('mediaCountBadge');
-  const mediaDrawer = document.getElementById('mediaDrawer');
-  const closeDrawerBtn = document.getElementById('closeDrawerBtn');
-  const drawerMediaList = document.getElementById('drawerMediaList');
-  const countAll = document.getElementById('countAll');
-  const countImages = document.getElementById('countImages');
-  const countVideos = document.getElementById('countVideos');
-  const countFiles = document.getElementById('countFiles');
-
-  const imageLightbox = document.getElementById('imageLightbox');
-  const lightboxImg = document.getElementById('lightboxImg');
-  const lightboxFileName = document.getElementById('lightboxFileName');
-  const lightboxDownloadBtn = document.getElementById('lightboxDownloadBtn');
-  const lightboxCloseBtn = document.getElementById('lightboxCloseBtn');
-  const lightboxBackdrop = document.getElementById('lightboxBackdrop');
   const mobileMenuBtn = document.getElementById('mobileMenuBtn');
   const sidebar = document.getElementById('sidebar');
   const appBackdrop = document.getElementById('appBackdrop');
@@ -158,13 +131,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let socket = null;
   let currentUser = null;
   let currentRoom = { type: 'channel', id: '#자유대화', name: '#자유대화', topic: '' };
-  let pendingFile = null;
   let unreadCounts = {}; // roomId -> count
   let currentHistory = [];
   let isSoundMuted = false;
   let typingTimeout = null;
   let isTyping = false;
-  let mediaUploadEnabled = false; // Default: separated/disabled for lightweight optimization
   let activeDms = new Map(); // targetUserId -> { userId, nickname, avatar, lastSnippet, updatedAt }
   let serverChannelsData = [];
   let currentServerInfo = {
@@ -308,34 +279,6 @@ document.addEventListener('DOMContentLoaded', () => {
     a.click();
     URL.revokeObjectURL(url);
   }
-
-  // Media Separation Controller (Lightweight text-chat optimization)
-  function applyMediaSeparation(enabled) {
-    mediaUploadEnabled = enabled;
-    if (!enabled) {
-      if (attachBtn) attachBtn.style.display = 'none';
-      if (attachmentPreviewBar) attachmentPreviewBar.style.display = 'none';
-      if (toggleGalleryBtn) toggleGalleryBtn.style.display = 'none';
-      if (mediaDrawer) mediaDrawer.style.display = 'none';
-      if (dragDropOverlay) dragDropOverlay.style.display = 'none';
-      if (messageInput) {
-        messageInput.placeholder = '메시지 또는 /명령어를 입력하세요... (Enter: 전송, Shift+Enter: 줄바꿈, /help: 명령어)';
-      }
-    } else {
-      if (attachBtn) attachBtn.style.display = '';
-      if (toggleGalleryBtn) toggleGalleryBtn.style.display = '';
-      if (dragDropOverlay) dragDropOverlay.style.display = '';
-      if (messageInput) {
-        messageInput.placeholder = '메시지를 입력하세요... (Enter: 전송, Shift+Enter: 줄바꿈, 이미지 복사 후 Ctrl+V 가능)';
-      }
-    }
-  }
-
-  // Fetch initial config from server
-  fetch('/api/config')
-    .then(r => r.json())
-    .then(cfg => applyMediaSeparation(!!cfg.mediaUploadEnabled))
-    .catch(() => applyMediaSeparation(false));
 
   // Sound generator (Lazy Web Audio API - zero background audio threads)
   let audioCtx = null;
@@ -835,7 +778,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (myAvatarDisplay) myAvatarDisplay.textContent = currentUser.avatar || '👤';
       if (myIdDisplay) myIdDisplay.textContent = `ID: #${currentUser.userId.slice(-4)}`;
 
-      applyMediaSeparation(!!data.mediaUploadEnabled);
       renderChannels(data.channels);
 
       const defaultRoomId = data.user.currentRoom || '#자유대화';
@@ -871,10 +813,6 @@ document.addEventListener('DOMContentLoaded', () => {
       // Only load local storage history - server does NOT provide past messages
       const localList = getLocalMessages(defaultRoomId);
       renderMessageHistory(localList);
-
-      if (data.mediaUploadEnabled) {
-        updateGalleryDrawer(localList);
-      }
 
       // Ensure URL-requested targetChannel is joined if initial room differed
       if (targetChannelParam && defaultRoomId.toLowerCase() !== targetChannelParam.toLowerCase() && !window.__initialUrlChannelJoined) {
@@ -1035,9 +973,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const localList = getLocalMessages(roomMeta.id);
       renderMessageHistory(localList);
 
-      if (mediaUploadEnabled) {
-        updateGalleryDrawer(localList);
-      }
       closeAllSidebarsOnMobile();
       renderUsers(lastUsersList);
       if (isTyping) {
@@ -1081,9 +1016,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (msg.roomId === currentRoom.id) {
         appendMessage(msg);
         currentHistory.push(msg);
-        if (mediaUploadEnabled) {
-          updateGalleryDrawer(currentHistory);
-        }
         if (msg.sender && msg.sender.userId !== currentUser?.userId) {
           playChime('receive');
           const isMention = currentUser && msg.content && (msg.content.includes(`@${currentUser.nickname}`) || msg.content.includes(currentUser.nickname));
@@ -1705,25 +1637,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const date = new Date(ts);
     return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   }
-  function formatFileSize(bytes) {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-  function getFileIcon(ext) {
-    const map = {
-      pdf: '📕',
-      zip: '📦', rar: '📦', '7z': '📦',
-      doc: '📘', docx: '📘',
-      xls: '📗', xlsx: '📗',
-      ppt: '📙', pptx: '📙',
-      txt: '📄', json: '📝', js: '💻', html: '🌐',
-      mp3: '🎵', wav: '🎵'
-    };
-    return map[ext.toLowerCase()] || '📁';
-  }
 
   // Render Message History (Batch render using DocumentFragment)
   function renderMessageHistory(history) {
@@ -1799,93 +1712,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const row = document.createElement('div');
     row.className = `message-row ${isMe ? 'me' : 'other'}`;
 
-    // Ultra-lightweight path for pure text messages (99% of chat)
-    if (!mediaUploadEnabled || msg.type === 'text' || !msg.fileInfo) {
-      const bubbleText = msg.content || (msg.fileInfo ? `[첨부: ${msg.fileInfo.originalName}]` : '');
-      row.innerHTML = `
-        <div class="msg-content-box">
-          <div class="msg-info-line">
-            <span class="msg-author">${authorPrefix}${escapeHtml(msg.sender?.nickname || '사용자')}</span>
-            <span class="msg-time">${formatMsgTime(msg.timestamp)}</span>
-          </div>
-          <div class="msg-bubble">${formatText(bubbleText)}</div>
-        </div>
-      `;
-      return row;
-    }
-
-    // Multimedia path (image/video/file)
-    let mediaHtml = '';
-    const safeMediaUrl = msg.fileInfo ? sanitizeMediaUrl(msg.fileInfo.url) : '';
-    if (safeMediaUrl && msg.type === 'image' && msg.fileInfo) {
-      const safeOrig = escapeHtml(msg.fileInfo.originalName || 'image');
-      const safeUrlAttr = escapeHtml(safeMediaUrl);
-      mediaHtml = `
-        <div class="media-image-container" data-img-url="${safeUrlAttr}" data-img-name="${safeOrig}">
-          <img src="${safeUrlAttr}" alt="${safeOrig}" loading="lazy">
-          <div class="media-image-overlay">
-            <span class="overlay-zoom-icon">🔍 확대보기</span>
-          </div>
-        </div>
-      `;
-    } else if (safeMediaUrl && msg.type === 'video' && msg.fileInfo) {
-      const safeMime = escapeHtml(msg.fileInfo.mimetype || 'video/mp4');
-      const safeUrlAttr = escapeHtml(safeMediaUrl);
-      mediaHtml = `
-        <div class="media-video-container">
-          <video controls preload="metadata">
-            <source src="${safeUrlAttr}" type="${safeMime}">
-            브라우저가 동영상 재생을 지원하지 않습니다.
-          </video>
-        </div>
-      `;
-    } else if (safeMediaUrl && msg.type === 'file' && msg.fileInfo) {
-      const safeOrig = escapeHtml(msg.fileInfo.originalName || 'file');
-      const ext = safeOrig.split('.').pop() || '';
-      const icon = getFileIcon(ext);
-      const safeUrlAttr = escapeHtml(safeMediaUrl);
-      mediaHtml = `
-        <div class="media-file-card">
-          <div class="file-card-icon">${icon}</div>
-          <div class="file-card-details">
-            <span class="file-card-name" title="${safeOrig}">${safeOrig}</span>
-            <span class="file-card-size">${formatFileSize(msg.fileInfo.size)}</span>
-          </div>
-          <a href="${safeUrlAttr}" download="${safeOrig}" target="_blank" class="file-download-btn" title="다운로드">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-          </a>
-        </div>
-      `;
-    }
-
-    const captionHtml = msg.content ? `<div class="media-caption">${formatText(msg.content)}</div>` : '';
-
     row.innerHTML = `
       <div class="msg-content-box">
         <div class="msg-info-line">
           <span class="msg-author">${authorPrefix}${escapeHtml(msg.sender?.nickname || '사용자')}</span>
           <span class="msg-time">${formatMsgTime(msg.timestamp)}</span>
         </div>
-        <div class="msg-bubble">
-          ${mediaHtml}
-          ${captionHtml}
-        </div>
+        <div class="msg-bubble">${formatText(msg.content || '')}</div>
       </div>
     `;
-
-    const imgEl = row.querySelector('.media-image-container');
-    if (imgEl) {
-      imgEl.addEventListener('click', () => {
-        openLightbox(imgEl.dataset.imgUrl, imgEl.dataset.imgName);
-      });
-      const imgTag = imgEl.querySelector('img');
-      if (imgTag) {
-        imgTag.addEventListener('load', () => {
-          scrollToBottom();
-        });
-      }
-    }
-
     return row;
   }
 
@@ -1922,23 +1757,6 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
-  }
-
-  function sanitizeMediaUrl(url) {
-    if (!url || typeof url !== 'string') return '';
-    const clean = url.trim();
-    if (/^\/uploads\/[a-zA-Z0-9._-]+$/.test(clean) && !clean.includes('..')) {
-      return clean;
-    }
-    try {
-      const parsed = new URL(clean, window.location.origin);
-      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin) {
-        if (/^\/uploads\/[a-zA-Z0-9._-]+$/.test(parsed.pathname) && !parsed.pathname.includes('..')) {
-          return parsed.pathname;
-        }
-      }
-    } catch (e) {}
-    return '';
   }
 
   function formatText(text) {
@@ -2017,93 +1835,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // File Attach Button (Guarded)
-  if (attachBtn && fileInputElement) {
-    attachBtn.addEventListener('click', () => {
-      if (!mediaUploadEnabled) return;
-      fileInputElement.click();
-    });
-    fileInputElement.addEventListener('change', () => {
-      if (!mediaUploadEnabled) return;
-      if (fileInputElement.files && fileInputElement.files[0]) {
-        handleFileSelected(fileInputElement.files[0]);
-      }
-    });
-  }
-
-  function handleFileSelected(file) {
-    if (!mediaUploadEnabled) {
-      appendSystemNotice('* 이미지, 동영상 및 파일 업로드 기능은 서버 정책에 따라 지원하지 않습니다.');
-      return;
-    }
-  }
-
-  if (removeAttachBtn) {
-    removeAttachBtn.addEventListener('click', () => {
-      pendingFile = null;
-      if (fileInputElement) fileInputElement.value = '';
-      if (attachmentPreviewBar) attachmentPreviewBar.style.display = 'none';
-    });
-  }
-
-  // Drag and drop block & notice
-  window.addEventListener('dragover', (e) => {
-    e.preventDefault();
-  }, false);
-
+  // Drag and drop / Paste block & notice (Pure text IRC only)
+  window.addEventListener('dragover', (e) => e.preventDefault(), false);
   window.addEventListener('drop', (e) => {
     e.preventDefault();
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      appendSystemNotice('* 이미지, 동영상 및 파일 업로드 기능은 서버 정책에 따라 지원하지 않습니다.');
+      appendSystemNotice('* 파일 업로드 기능은 지원하지 않습니다. (순수 텍스트 IRC 전용)');
     }
   }, false);
 
-  // Clipboard Paste (Ctrl+V) Image block & notice
   window.addEventListener('paste', (e) => {
     const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
     if (!items) return;
     for (let item of items) {
       if (item.kind === 'file') {
         e.preventDefault();
-        appendSystemNotice('* 이미지, 동영상 및 파일 업로드 기능은 서버 정책에 따라 지원하지 않습니다.');
+        appendSystemNotice('* 이미지 및 파일 업로드 기능은 지원하지 않습니다. (순수 텍스트 IRC 전용)');
         break;
       }
     }
   });
-
-  // Upload File via XHR for progress bar
-  function uploadFile(file, onProgress) {
-    return new Promise((resolve, reject) => {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload', true);
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          onProgress(percent);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const res = JSON.parse(xhr.responseText);
-            resolve(res);
-          } catch (err) {
-            reject(err);
-          }
-        } else {
-          reject(new Error('업로드 실패: ' + xhr.statusText));
-        }
-      };
-
-      xhr.onerror = () => reject(new Error('네트워크 오류'));
-      xhr.send(formData);
-    });
-  }
 
   // Slash Command Parser
   function parseSlashCommand(rawInput) {
@@ -2688,7 +2439,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Send Message Logic (Unified for Enter key, Send button, and Form submit)
-  async function handleSendMessage() {
+  function handleSendMessage() {
     // Immediately cancel typing indicator
     if (isTyping) {
       isTyping = false;
@@ -2699,7 +2450,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const text = messageInput.value.trim();
-    if (!text && !pendingFile) return;
+    if (!text) return;
 
     // Check for slash command (/join, /topic, /op, /deop, /nick, /me, /clear, /help, /export)
     if (text.startsWith('/')) {
@@ -2709,44 +2460,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let fileInfo = null;
-    let msgType = 'text';
-
-    if (pendingFile) {
-      uploadProgressBar.style.display = 'block';
-      progressFill.style.width = '10%';
-
-      try {
-        const uploadRes = await uploadFile(pendingFile, (pct) => {
-          progressFill.style.width = `${pct}%`;
-        });
-
-        if (uploadRes.success) {
-          fileInfo = uploadRes.file;
-          msgType = fileInfo.fileType; // 'image' | 'video' | 'file'
-        }
-      } catch (err) {
-        alert('파일 업로드 중 오류가 발생했습니다: ' + err.message);
-        uploadProgressBar.style.display = 'none';
-        return;
-      }
-
-      // Reset file input
-      pendingFile = null;
-      fileInputElement.value = '';
-      attachmentPreviewBar.style.display = 'none';
-      uploadProgressBar.style.display = 'none';
-      progressFill.style.width = '0%';
-    }
-
     // Emit message to server
     if (socket && socket.connected) {
       socket.emit('send_message', {
         roomId: currentRoom.id,
         recipientId: (currentRoom.type === 'dm') ? currentRoom.targetUserId : undefined,
         content: text,
-        type: msgType,
-        fileInfo
+        type: 'text'
       });
     }
 
@@ -2989,110 +2709,5 @@ document.addEventListener('DOMContentLoaded', () => {
     exportChatBtn.addEventListener('click', () => {
       exportChatHistory(currentRoom.id);
     });
-  }
-
-  // Lightbox View
-  function openLightbox(url, name) {
-    lightboxImg.src = url;
-    lightboxFileName.textContent = name;
-    lightboxDownloadBtn.href = url;
-    lightboxDownloadBtn.setAttribute('download', name);
-    imageLightbox.style.display = 'flex';
-  }
-  function closeLightbox() {
-    imageLightbox.style.display = 'none';
-    lightboxImg.src = '';
-  }
-  lightboxCloseBtn.addEventListener('click', closeLightbox);
-  lightboxBackdrop.addEventListener('click', closeLightbox);
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && imageLightbox.style.display === 'flex') {
-      closeLightbox();
-    }
-  });
-
-  // Media Drawer & Gallery
-  toggleGalleryBtn.addEventListener('click', () => {
-    mediaDrawer.classList.toggle('open');
-  });
-  closeDrawerBtn.addEventListener('click', () => {
-    mediaDrawer.classList.remove('open');
-  });
-
-  // Drawer Tabs
-  let activeDrawerFilter = 'all';
-  document.querySelectorAll('.drawer-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.drawer-tab').forEach((t) => t.classList.remove('active'));
-      tab.classList.add('active');
-      activeDrawerFilter = tab.dataset.drawerTab;
-      renderDrawerMedia(currentHistory);
-    });
-  });
-
-  function updateGalleryDrawer(history) {
-    const mediaMsgs = (history || []).filter((m) => m.fileInfo);
-    mediaCountBadge.textContent = mediaMsgs.length;
-
-    const imgCount = mediaMsgs.filter((m) => m.type === 'image').length;
-    const vidCount = mediaMsgs.filter((m) => m.type === 'video').length;
-    const fileCount = mediaMsgs.filter((m) => m.type === 'file').length;
-
-    countAll.textContent = mediaMsgs.length;
-    countImages.textContent = imgCount;
-    countVideos.textContent = vidCount;
-    countFiles.textContent = fileCount;
-
-    renderDrawerMedia(history);
-  }
-
-  function renderDrawerMedia(history) {
-    let mediaMsgs = (history || []).filter((m) => m.fileInfo);
-
-    if (activeDrawerFilter === 'images') {
-      mediaMsgs = mediaMsgs.filter((m) => m.type === 'image');
-    } else if (activeDrawerFilter === 'videos') {
-      mediaMsgs = mediaMsgs.filter((m) => m.type === 'video');
-    } else if (activeDrawerFilter === 'files') {
-      mediaMsgs = mediaMsgs.filter((m) => m.type === 'file');
-    }
-
-    if (mediaMsgs.length === 0) {
-      drawerMediaList.innerHTML = `
-        <div class="drawer-empty-state">
-          <span>📂</span>
-          <p>공유된 파일이 없습니다.</p>
-        </div>
-      `;
-      return;
-    }
-
-    drawerMediaList.innerHTML = '';
-    const grid = document.createElement('div');
-    grid.className = 'gallery-grid';
-
-    mediaMsgs.forEach((m) => {
-      if (m.type === 'image') {
-        const item = document.createElement('div');
-        item.className = 'gallery-item-thumb';
-        item.innerHTML = `<img src="${m.fileInfo.url}" alt="${escapeHtml(m.fileInfo.originalName)}">`;
-        item.addEventListener('click', () => openLightbox(m.fileInfo.url, m.fileInfo.originalName));
-        grid.appendChild(item);
-      } else {
-        const fileRow = document.createElement('div');
-        fileRow.className = 'gallery-file-row';
-        const ext = m.fileInfo.originalName.split('.').pop() || '';
-        fileRow.innerHTML = `
-          <span>${m.type === 'video' ? '🎬' : getFileIcon(ext)}</span>
-          <span class="gallery-file-name" title="${escapeHtml(m.fileInfo.originalName)}">${escapeHtml(m.fileInfo.originalName)}</span>
-          <a href="${m.fileInfo.url}" download target="_blank" style="color: var(--accent-cyan); text-decoration: none; font-size: 13px;">받기</a>
-        `;
-        drawerMediaList.appendChild(fileRow);
-      }
-    });
-
-    if (grid.children.length > 0) {
-      drawerMediaList.prepend(grid);
-    }
   }
 });

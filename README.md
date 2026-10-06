@@ -18,17 +18,14 @@ nyaa-chat-server/
 │   ├── dmModule.js            # 1:1 귓속말
 │   ├── fsSafe.js              # 파일 쓰기 보조
 │   ├── nickServ.js            # 닉네임 등록 및 인증
-│   ├── peerDirectoryModule.js # 이웃 서버 목록 동기화
-│   └── uploadModule.js        # 파일 첨부 처리
+│   └── peerDirectoryModule.js # 이웃 서버 목록 동기화
 ├── public/                    # 내장 웹 클라이언트
 │   ├── index.html             # 웹 채팅 UI 마크업
 │   ├── app.js                 # 클라이언트 스크립트
 │   └── style.css              # 반응형 스타일시트
-├── data/                      # 런타임 데이터 (Git 제외)
-│   ├── .gitkeep
-│   └── peers_whitelist.example.txt # 화이트리스트 서버 설정 예시
-└── uploads/                   # 파일 첨부 저장소 (Git 제외)
-    └── .gitkeep
+└── data/                      # 런타임 데이터 (Git 제외)
+    ├── .gitkeep
+    └── peers_whitelist.example.txt # 화이트리스트 서버 설정 예시
 ```
 
 ---
