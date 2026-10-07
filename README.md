@@ -1,3 +1,5 @@
+[English](README.en.md) | [한국어](README.md)
+
 # 🐾 Nyaa Chat Server
 
 Node.js와 Socket.IO 기반의 실시간 채팅 서버입니다. 별도의 외부 데이터베이스 없이 파일 기반으로 데이터를 저장하며, 웹 브라우저 및 전용 데스크톱 클라이언트와 연동됩니다.
