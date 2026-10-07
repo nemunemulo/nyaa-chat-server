@@ -319,6 +319,46 @@ async function runTests() {
   assert.strictEqual(aliceSawFakeTyping, false, 'typing from unjoined user must be ignored!');
   console.log('✔ Unjoined room part_channel & typing spoofing successfully blocked!');
 
+  console.log('\n--- Test 13: X-Forwarded-For Spoofing Defense on /api/link-preview ---');
+  // 1. Direct unit test of getHttpClientIp
+  const mockReqUntrusted = {
+    socket: { remoteAddress: '198.51.100.5' },
+    headers: { 'x-forwarded-for': '1.1.1.1' }
+  };
+  assert.strictEqual(serverModule.getHttpClientIp(mockReqUntrusted), '198.51.100.5', 'Untrusted connection must ignore X-Forwarded-For');
+
+  // 2. Integration test: With untrusted proxy, connection must not be allowed to spoof X-Forwarded-For
+  process.env.TRUST_PROXY = 'false';
+  let lastStatus = 0;
+  for (let i = 0; i < 20; i++) {
+    const res = await new Promise((resolve) => {
+      const req = http.get(
+        `${SERVER_URL}/api/link-preview?url=${encodeURIComponent('http://127.0.0.1:3099/fake_' + i)}`,
+        { headers: { 'X-Forwarded-For': `203.0.113.${i}` } },
+        (r) => {
+          r.resume();
+          resolve(r.statusCode);
+        }
+      );
+      req.on('error', () => resolve(500));
+    });
+    lastStatus = res;
+    if (res === 429) {
+      break;
+    }
+  }
+  delete process.env.TRUST_PROXY;
+  assert.strictEqual(lastStatus, 429, 'Spoofed X-Forwarded-For headers from untrusted connection must not bypass rate limit!');
+  console.log('✔ Fake X-Forwarded-For headers successfully ignored by untrusted connection rate limiter!');
+
+  console.log('\n--- Test 14: exec_server_command Object roomId & Non-String Type Hardening ---');
+  clientEve.emit('exec_server_command', { roomId: { malicious: 'object' }, cmd: { bad: 'type' } });
+  clientEve.emit('exec_server_command', { roomId: 12345, cmd: [] });
+  clientEve.emit('exec_server_command', null);
+  clientEve.emit('peer_admin_command', { roomId: {}, cmd: {} });
+  await delay(400);
+  console.log('✔ exec_server_command and peer_admin_command survived non-string and object roomId payloads without TypeError!');
+
   console.log('\n🎉 ALL SECURITY PATCH TESTS PASSED SUCCESSFULLY! 🎉\n');
 
   client1.disconnect();

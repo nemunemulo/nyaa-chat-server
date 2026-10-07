@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const dns = require('dns').promises;
 const { Server } = require('socket.io');
@@ -123,13 +124,14 @@ function saveBannedIps() {
 
 function isTrustedProxy(ip) {
   if (!ip) return false;
+  if (process.env.TRUST_PROXY === 'false') return false;
   const clean = ip.replace(/^::ffff:/, '');
-  if (clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true;
   if (process.env.TRUST_PROXY === 'true') return true;
   if (process.env.TRUSTED_PROXIES) {
     const list = process.env.TRUSTED_PROXIES.split(',').map(s => s.trim());
     if (list.includes(clean)) return true;
   }
+  if (clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true;
   return false;
 }
 
@@ -139,6 +141,16 @@ function getClientIp(socket) {
   const forwarded = socket.handshake?.headers?.['x-forwarded-for'];
   if (forwarded && isTrustedProxy(raw)) {
     return forwarded.split(',')[0].trim().replace(/^::ffff:/, '');
+  }
+  return raw;
+}
+
+function getHttpClientIp(req) {
+  if (!req) return '';
+  const raw = (req.socket?.remoteAddress || req.connection?.remoteAddress || '').replace(/^::ffff:/, '');
+  const forwarded = req.headers?.['x-forwarded-for'];
+  if (forwarded && isTrustedProxy(raw)) {
+    return String(forwarded).split(',')[0].trim().replace(/^::ffff:/, '');
   }
   return raw;
 }
@@ -951,41 +963,150 @@ function isPrivateOrReservedIpAddress(ipStr) {
 }
 
 // Full DNS resolution check to prevent DNS Rebinding and SSRF
-async function isSafePublicUrl(urlStr) {
+async function resolveSafePublicHost(urlStr) {
   try {
     const parsed = new URL(urlStr);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
 
     const hostname = parsed.hostname.toLowerCase().trim();
-    if (!hostname) return false;
+    if (!hostname) return null;
 
     // Localhost aliases & internal domain suffixes
     if (hostname === 'localhost' || hostname.endsWith('.localhost') ||
         hostname.endsWith('.local') || hostname.endsWith('.internal') ||
         hostname.endsWith('.lan') || hostname.endsWith('.localdomain') ||
         hostname.endsWith('.home.arpa')) {
-      return false;
+      return null;
     }
 
     // Direct IP address
     if (net.isIP(hostname)) {
-      return !isPrivateOrReservedIpAddress(hostname);
+      if (isPrivateOrReservedIpAddress(hostname)) return null;
+      return { parsed, hostname, safeIp: hostname, isIp: true };
     }
 
     // Resolve DNS (A and AAAA records) and verify all resolved IPs
     const records = await dns.lookup(hostname, { all: true, verbatim: true });
-    if (!records || records.length === 0) return false;
+    if (!records || records.length === 0) return null;
 
     for (const record of records) {
       if (isPrivateOrReservedIpAddress(record.address)) {
-        return false;
+        return null;
       }
     }
 
-    return true;
+    // Pick first safe IP for DNS Pinning (prevents DNS Rebinding / TOCTOU)
+    const safeIp = records[0].address;
+    return { parsed, hostname, safeIp, isIp: false };
   } catch (_) {
-    return false;
+    return null;
   }
+}
+
+async function isSafePublicUrl(urlStr) {
+  const resolved = await resolveSafePublicHost(urlStr);
+  return resolved !== null;
+}
+
+// Zero-Rebinding Safe HTTP Fetcher: Connects directly to verified safe IP (DNS Pinning)
+function safeFetchOpenGraphHtml(urlStr, maxRedirects = 3) {
+  return new Promise((resolve) => {
+    let redirectsCount = 0;
+
+    const doRequest = async (targetUrl) => {
+      if (redirectsCount > maxRedirects) {
+        return resolve(null);
+      }
+
+      const safeInfo = await resolveSafePublicHost(targetUrl);
+      if (!safeInfo) {
+        return resolve(null);
+      }
+
+      const { parsed, hostname, safeIp } = safeInfo;
+      const isHttps = parsed.protocol === 'https:';
+      const transport = isHttps ? https : http;
+      const port = parsed.port ? parseInt(parsed.port, 10) : (isHttps ? 443 : 80);
+
+      const reqOptions = {
+        host: safeIp, // DNS Pinning: Socket connects directly to verified IP!
+        port: port,
+        path: (parsed.pathname || '/') + (parsed.search || ''),
+        method: 'GET',
+        headers: {
+          'Host': hostname,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        },
+        timeout: 3000
+      };
+
+      if (isHttps) {
+        reqOptions.servername = hostname; // TLS SNI + Certificate validation against original hostname
+        reqOptions.rejectUnauthorized = true;
+      }
+
+      let finished = false;
+      let req = null;
+      try {
+        req = transport.request(reqOptions, (res) => {
+          // Handle HTTP 3xx Redirects safely with re-validation at each hop
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume();
+            try {
+              const nextUrl = new URL(res.headers.location, targetUrl).href;
+              redirectsCount++;
+              return doRequest(nextUrl);
+            } catch (_) {
+              return resolve(null);
+            }
+          }
+
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume();
+            return resolve(null);
+          }
+
+          // Limit data read to 64KB (prevent DoS memory exhaustion)
+          let rawData = '';
+          let bytesRead = 0;
+          res.setEncoding('utf8');
+
+          res.on('data', (chunk) => {
+            bytesRead += Buffer.byteLength(chunk);
+            rawData += chunk;
+            if (bytesRead >= 65536) {
+              finished = true;
+              res.destroy();
+              resolve(rawData);
+            }
+          });
+
+          res.on('end', () => {
+            if (!finished) {
+              finished = true;
+              resolve(rawData);
+            }
+          });
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          resolve(null);
+        });
+
+        req.on('error', () => {
+          resolve(null);
+        });
+
+        req.end();
+      } catch (_) {
+        resolve(null);
+      }
+    };
+
+    doRequest(urlStr);
+  });
 }
 
 // Link Preview Cache & Helper (YouTube, Steam, and Web)
@@ -1080,59 +1201,11 @@ async function getLinkPreview(rawUrl) {
       }
     }
 
-    // 3. Generic OpenGraph Fallback (with safe manual redirect loop & per-hop SSRF validation)
+    // 3. Generic OpenGraph Fallback (with DNS-pinned safe socket connection & manual redirect loop)
     if (!result) {
       try {
-        let currentUrl = cleanUrl;
-        let redirectsCount = 0;
-        let res = null;
-
-        while (redirectsCount <= 3) {
-          if (!(await isSafePublicUrl(currentUrl))) {
-            return null;
-          }
-          res = await fetch(currentUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-            signal: AbortSignal.timeout(3000),
-            redirect: 'manual'
-          });
-
-          if (res.status >= 300 && res.status < 400) {
-            const location = res.headers.get('location');
-            if (!location) {
-              res = null;
-              break;
-            }
-            try {
-              currentUrl = new URL(location, currentUrl).href;
-            } catch (_) {
-              res = null;
-              break;
-            }
-            redirectsCount++;
-          } else {
-            break;
-          }
-        }
-
-        if (res && res.ok) {
-          // Read up to 64KB to avoid memory exhaustion (DoS)
-          let html = '';
-          if (res.body && typeof res.body.getReader === 'function') {
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let bytesRead = 0;
-            while (bytesRead < 65536) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              bytesRead += value.length;
-              html += decoder.decode(value, { stream: true });
-            }
-            reader.cancel().catch(() => {});
-          } else {
-            const rawText = await res.text();
-            html = rawText.slice(0, 65536);
-          }
+        const html = await safeFetchOpenGraphHtml(cleanUrl);
+        if (html) {
           const getMeta = (prop) => {
             const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["'](?:og:)?${prop}["'][^>]+content=["']([^"']+)["']`, 'i')) ||
                       html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:)?${prop}["']`, 'i'));
@@ -1197,8 +1270,8 @@ setInterval(() => {
 
 // Link Preview REST API Endpoint
 app.get('/api/link-preview', async (req, res) => {
-  const rawIp = (req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
-  if (!checkLinkPreviewRate(rawIp)) {
+  const clientIp = getHttpClientIp(req);
+  if (!checkLinkPreviewRate(clientIp)) {
     return res.status(429).json({ error: '요청 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요.' });
   }
   const targetUrl = req.query.url;
@@ -4063,3 +4136,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  - Bind:    0.0.0.0:${PORT} (All Interfaces)`);
   console.log(`=============================================`);
 });
+
+module.exports = { app, server, io, getHttpClientIp, getClientIp, isTrustedProxy, isSafePublicUrl, resolveSafePublicHost };

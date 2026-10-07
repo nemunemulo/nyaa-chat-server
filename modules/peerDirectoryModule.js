@@ -22,6 +22,10 @@ const https = require('https');
 const crypto = require('crypto');
 const { safeAtomicWriteFileSync } = require('./fsSafe');
 
+function isSafeObject(obj) {
+  return obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+}
+
 function secureCompareStrings(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const bufA = Buffer.from(a);
@@ -655,19 +659,24 @@ function setupPeerDirectoryModule({
 
     // Execute Server Extended Command (e.g., custom bot interaction on Server C)
     socket.on('exec_server_command', (data) => {
+      if (!isSafeObject(data)) return;
       const user = users.get(socket.id);
-      const cmdInput = data && (data.cmd || data.command);
-      if (!user || !cmdInput) return;
+      const cmdInput = data.cmd || data.command;
+      if (!user || typeof cmdInput !== 'string') return;
 
-      const rawCmd = String(cmdInput).replace(/^\//, '').toLowerCase();
-      if (PROTECTED_CORE_COMMANDS.has(rawCmd)) return; // Never intercept core commands
+      const rawCmd = cmdInput.replace(/^\//, '').toLowerCase().trim();
+      if (!rawCmd || PROTECTED_CORE_COMMANDS.has(rawCmd)) return;
+
+      const rawRoomId = (typeof data.roomId === 'string') ? data.roomId.trim() : '';
+      const targetRoom = rawRoomId || (user && user.currentRoom) || '#자유대화';
+      if (typeof targetRoom !== 'string') return;
 
       const extList = serverConfig.extendedCommands || [];
       const matched = extList.find((c) => String(c.cmd).replace(/^\//, '').toLowerCase() === rawCmd);
       if (!matched) {
         socket.emit('new_message', {
           id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          roomId: data.roomId || user.currentRoom || '#자유대화',
+          roomId: targetRoom,
           type: 'system',
           content: `* [${serverConfig.serverName}] 지원하지 않는 서버 명령어입니다: /${rawCmd}`,
           timestamp: Date.now()
@@ -675,7 +684,6 @@ function setupPeerDirectoryModule({
         return;
       }
 
-      const targetRoom = data.roomId || user.currentRoom || '#자유대화';
       if (targetRoom.startsWith('#')) {
         const isMember = user.joinedChannels && user.joinedChannels.has(targetRoom);
         if (!isMember && !user.isServerOper) {
@@ -688,8 +696,13 @@ function setupPeerDirectoryModule({
           });
           return;
         }
+      } else if (targetRoom.startsWith('dm_')) {
+        const parts = targetRoom.slice(3).split('_');
+        if (!parts.includes(user.userId) && !user.isServerOper) {
+          return;
+        }
       }
-      const argsText = String(data.args || '').trim();
+      const argsText = typeof data.args === 'string' ? data.args.trim() : '';
       let replyTemplate = matched.response || `🤖 [${serverConfig.serverName}] $nick님이 /${rawCmd} 명령어를 실행했습니다.`;
 
       replyTemplate = replyTemplate
@@ -723,8 +736,10 @@ function setupPeerDirectoryModule({
 
     // Server Operator (/oper) Commands for Whitelist & Server Identity Management
     socket.on('peer_admin_command', async (data) => {
+      if (!isSafeObject(data)) return;
       const user = users.get(socket.id);
-      const roomId = (data && data.roomId) || (user && user.currentRoom) || '#자유대화';
+      const rawRoomId = (typeof data.roomId === 'string') ? data.roomId.trim() : '';
+      const roomId = rawRoomId || (user && user.currentRoom) || '#자유대화';
       const sendSys = (txt) => {
         socket.emit('new_message', {
           id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
