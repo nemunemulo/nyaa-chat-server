@@ -764,6 +764,7 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('login_error', (data) => {
       alert(data.message || '접속에 실패했습니다. 다른 닉네임을 사용해 주세요.');
       loginModal.classList.add('active');
+      loginModal.style.display = 'flex';
       nicknameInput.focus();
     });
 
@@ -774,6 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial state received from server
     socket.on('init_state', (data) => {
       loginModal.classList.remove('active');
+      loginModal.style.display = 'none';
       currentUser = data.user;
       if (myAvatarDisplay) myAvatarDisplay.textContent = currentUser.avatar || '👤';
       if (myIdDisplay) myIdDisplay.textContent = `ID: #${currentUser.userId.slice(-4)}`;
@@ -1149,7 +1151,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Auto-connect when hopping from another server via Server List (?channel=#...&nick=...)
   if (targetChannelParam && urlNickParam && urlNickParam.trim()) {
-    handleToggleAll(true);
+    if (loginModal) {
+      loginModal.classList.remove('active');
+      loginModal.style.display = 'none';
+    }
     localStorage.setItem('nyaa_terms_agreed', 'true');
     const autoNick = urlNickParam.trim().slice(0, 16);
     const autoAvatar = (selectedAvatarSpan && selectedAvatarSpan.textContent) || localStorage.getItem('omnichat_avatar') || '👤';
