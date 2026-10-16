@@ -1587,13 +1587,9 @@ io.on('connection', (socket) => {
     }
 
     // Single-Session Policy: Prevent duplicate multi-window/multi-browser logins from the same computer/IP
-    // In production, x-test-client is strictly ignored; only NODE_ENV === 'test' may use it.
-    const isTestClient = Boolean(
-      (process.env.NODE_ENV === 'test' && socket.handshake?.headers?.['x-test-client'] === 'true') ||
-      process.env.ALLOW_MULTI_CONNECT === 'true'
-    );
+    const allowMultiConnect = process.env.ALLOW_MULTI_CONNECT === 'true';
 
-    if (!isTestClient) {
+    if (!allowMultiConnect) {
       // 1) Same browser session check with a DIFFERENT nickname:
       if (clientInstanceId) {
         const sameBrowserDiffNick = Array.from(users.values()).find(
@@ -3481,18 +3477,6 @@ io.on('connection', (socket) => {
       tempBans
     });
   });
-
-  // Test helper: simulate mute expiry for multi-strike test suite (only enabled in test environment)
-  if (process.env.NODE_ENV === 'test' && socket.handshake?.headers?.['x-test-client'] === 'true') {
-    socket.on('test_clear_mute', () => {
-      const clientIp = getClientIp(socket);
-      const user = users.get(socket.id);
-      if (user) {
-        antiSpam.clearMuteOnly(clientIp, user.userId);
-      }
-    });
-  }
-
 
   // Send Message (Text / Action / File)
   socket.on('send_message', (msgData) => {
