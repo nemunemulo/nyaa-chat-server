@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "Ultra-lightweight IRC-style multi-server real-time chat application",
   "main": "server.js",
+  "license": "MIT",
+  "author": "Nyaa Chat Contributors",
   "scripts": {
     "start": "node server.js"
   },
