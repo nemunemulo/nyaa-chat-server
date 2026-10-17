@@ -7,6 +7,32 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+
+// Zero-dependency .env loader: automatically populate process.env from .env if present
+const envFilePath = path.join(__dirname, '.env');
+if (fs.existsSync(envFilePath)) {
+  try {
+    const envContent = fs.readFileSync(envFilePath, 'utf-8');
+    envContent.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (process.env[key] === undefined) {
+          process.env[key] = val;
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('[ENV] Warning: Failed to load .env file:', err.message);
+  }
+}
+
 const { safeAtomicWriteFile, safeAtomicWriteFileSync } = require('./modules/fsSafe');
 const { setupDmModule } = require('./modules/dmModule');
 const { setupPeerDirectoryModule } = require('./modules/peerDirectoryModule');
@@ -68,6 +94,8 @@ const io = new Server(server, {
 });
 
 // Restrict web browser socket connections when ENABLE_WEB_CLIENT is false
+// Note: This disables the web browser UI service by intercepting standard browser Origin headers.
+// (Dedicated desktop clients connect without browser-enforced Origin restrictions)
 io.use((socket, next) => {
   if (!ENABLE_WEB_CLIENT && socket.handshake?.headers?.origin) {
     return next(new Error('WEB_CLIENT_DISABLED: Web chat client is disabled on this server. Please use the native desktop client.'));
