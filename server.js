@@ -55,12 +55,24 @@ app.use((req, res, next) => {
 // Default: false (Separated and disabled per user policy)
 const ENABLE_1ON1_DM = process.env.ENABLE_1ON1_DM === 'true';
 
+// Feature Flag: Web Browser Client Support
+// Default: false (Disabled by default; native desktop client only)
+const ENABLE_WEB_CLIENT = process.env.ENABLE_WEB_CLIENT === 'true';
+
 const serverStartTime = Date.now();
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
   maxHttpBufferSize: 1e6 // 1MB buffer for lightweight IRC text chat
+});
+
+// Restrict web browser socket connections when ENABLE_WEB_CLIENT is false
+io.use((socket, next) => {
+  if (!ENABLE_WEB_CLIENT && socket.handshake?.headers?.origin) {
+    return next(new Error('WEB_CLIENT_DISABLED: Web chat client is disabled on this server. Please use the native desktop client.'));
+  }
+  next();
 });
 
 const PORT = process.env.PORT || 3000;
@@ -884,7 +896,43 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+if (ENABLE_WEB_CLIENT) {
+  app.use(express.static(path.join(__dirname, 'public')));
+} else {
+  // Web client is disabled by default: provide informational page for browser visitors
+  app.get('/', (req, res) => {
+    res.status(200).send(`<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NyaaChat Server</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 36px 30px; max-width: 440px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+    h2 { margin: 0 0 12px; font-size: 22px; color: #38bdf8; }
+    p { margin: 0 0 18px; color: #94a3b8; font-size: 14px; line-height: 1.6; }
+    .badge { display: inline-block; padding: 4px 10px; font-size: 12px; font-weight: 600; border-radius: 4px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; margin-bottom: 16px; }
+    .footer { font-size: 12px; color: #64748b; margin-top: 24px; border-top: 1px solid #334155; padding-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">서버 정상 가동 중 (Online)</div>
+    <h2>🐾 NyaaChat Server</h2>
+    <p>본 서버의 웹 브라우저 채팅 인터페이스는 비활성화되어 있습니다.<br><br>채팅에 접속하시려면 <strong>전용 데스크톱 클라이언트(NyaaChat Client)</strong>를 실행해 주세요.</p>
+    <div class="footer">NyaaChat Core v1.0.0 · Native Client Exclusive Mode</div>
+  </div>
+</body>
+</html>`);
+  });
+
+  // Block direct access to web app scripts and assets when disabled
+  app.use(['/app.js', '/style.css', '/index.html'], (req, res) => {
+    res.status(404).send('Web chat client is disabled.');
+  });
+}
 
 // Separated 1:1 Direct Message Module (Disabled by default)
 const dmModule = setupDmModule(io, {
@@ -895,6 +943,7 @@ const dmModule = setupDmModule(io, {
 app.get('/api/config', (req, res) => {
   res.json({
     dmEnabled: ENABLE_1ON1_DM,
+    webClientEnabled: ENABLE_WEB_CLIENT,
     antiSpam: {
       windowSeconds: 5,
       maxMessages: 10,
@@ -4118,6 +4167,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  - Local:   http://localhost:${PORT}`);
   console.log(`  - Network: http://${localIp}:${PORT}`);
   console.log(`  - Bind:    0.0.0.0:${PORT} (All Interfaces)`);
+  console.log(`  - Web UI:  ${ENABLE_WEB_CLIENT ? 'Enabled' : 'Disabled (Desktop Client Only)'}`);
   console.log(`=============================================`);
 });
 

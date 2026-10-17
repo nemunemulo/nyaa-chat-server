@@ -49,6 +49,7 @@ cp .env.example .env
 
 ```env
 PORT=3000
+ENABLE_WEB_CLIENT=false  # 기본값: false (웹 브라우저 채팅 비활성화, 전용 클라이언트만 허용)
 OPER_USER=admin
 OPER_PASS=your_password
 NODE_ENV=production
@@ -56,13 +57,9 @@ NODE_ENV=production
 
 ### 3. 서버 실행
 ```bash
-# 개발 모드
-npm run dev
-
-# 일반 실행
 npm start
 ```
-서버 실행 후 웹 브라우저에서 `http://localhost:3000` (또는 설정한 포트)으로 접속할 수 있습니다.
+기본 설정(`ENABLE_WEB_CLIENT=false`)에서는 **전용 데스크톱 클라이언트(NyaaChat Client)**로만 접속할 수 있으며, 웹 브라우저 접속 시에는 안내 페이지가 표시됩니다. 웹 브라우저 채팅을 활성화하려면 `.env`에서 `ENABLE_WEB_CLIENT=true`로 설정하세요.
 
 ---
 

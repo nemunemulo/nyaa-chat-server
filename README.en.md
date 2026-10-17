@@ -49,6 +49,7 @@ cp .env.example .env
 
 ```env
 PORT=3000
+ENABLE_WEB_CLIENT=false  # Default: false (Web browser chat disabled, native client only)
 OPER_USER=admin
 OPER_PASS=your_password
 NODE_ENV=production
@@ -56,13 +57,9 @@ NODE_ENV=production
 
 ### 3. Running the Server
 ```bash
-# Development mode
-npm run dev
-
-# Production mode
 npm start
 ```
-Once started, access the web client at `http://localhost:3000` (or your configured port).
+By default (`ENABLE_WEB_CLIENT=false`), users can only connect using the **dedicated desktop client (NyaaChat Client)**. Web browsers visiting the server will see an informational status page. To enable browser chat, set `ENABLE_WEB_CLIENT=true` in `.env`.
 
 ---
 
