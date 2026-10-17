@@ -32,6 +32,20 @@ nyaa-chat-server/
 
 ---
 
+## 🔌 Architecture & Protocols
+
+Nyaa Chat Server is an autonomous, lightweight real-time chat server combining traditional IRC workflows with modern WebSocket (Socket.IO v4) technology.
+
+- **Real-Time Socket Communication**:
+  - Leverages `Engine.IO v4 / Socket.IO v4` WebSocket and JSON events (`user_join`, `send_message`, `new_message`, `join_channel`, etc.) for lightweight bidirectional messaging.
+- **Autonomous Distributed Network (Peer Directory Module)**:
+  - Each server operates as an isolated chat space without replicating or cross-broadcasting message logs.
+  - Neighboring servers (`peers`) exchange lightweight summary records (server health, online counts, and public channel listings) via HTTP REST authenticated with `x-peer-token`.
+- **Client Freedom & Backward Compatibility**:
+  - Provides broad compatibility with traditional IRC slash commands (`/join`, `/msg`, `/nick`, `/topic`, etc.), while ensuring server extensions remain decoupled from core messaging protocols.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Installation

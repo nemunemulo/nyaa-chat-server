@@ -32,6 +32,20 @@ nyaa-chat-server/
 
 ---
 
+## 🔌 아키텍처 및 통신 프로토콜 (Architecture & Protocols)
+
+Nyaa Chat Server는 IRC의 사용 경험과 현대적인 WebSocket(Socket.IO v4) 통신을 결합한 독립 자치형 경량 채팅 서버입니다.
+
+- **실시간 소켓 통신**:
+  - `Engine.IO v4 / Socket.IO v4` 기반의 WebSocket 및 JSON 이벤트(`user_join`, `send_message`, `new_message`, `join_channel` 등)로 클라이언트와 빠르고 가볍게 통신합니다.
+- **독립 자치 분산 네트워크 (Peer Directory Module)**:
+  - 각 서버는 서로의 대화 내용을 복제하거나 간섭하지 않는 완전한 독립 공간입니다.
+  - 이웃 서버(`peer`)끼리는 `x-peer-token` 보안 헤더를 통해 **서버 상태, 접속자 수, 공개 채널 목록(디렉터리 수첩)**만 HTTP REST로 안전하게 교환합니다.
+- **클라이언트 자율성 & 하위 호환성**:
+  - 표준 IRC 명령어 체계(`/join`, `/msg`, `/nick`, `/topic` 등)를 폭넓게 지원하며, 서버별 확장 모듈이 메인 채팅 프로토콜을 침해하지 않도록 설계되었습니다.
+
+---
+
 ## 🚀 빠른 시작
 
 ### 1. 설치
