@@ -21,3 +21,6 @@ Thumbs.db
 
 # Standalone client is managed in a separate repository (nyaachat-client)
 client/
+
+# Custom homepage
+public/home.html

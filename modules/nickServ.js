@@ -144,7 +144,6 @@ class NickServ {
     if (!nickname) return true;
     const clean = nickname.toLowerCase().trim();
     if (clean === '냥봇' || clean === '챗봇' || clean === 'bot_nyaa' || clean === '^냥봇') return true;
-    if (clean === '네무' || clean === '네무로' || clean === 'nemu' || clean === 'nemulo') return true;
     if (clean === 'system' || clean === 'admin' || clean === '관리자' || clean === '운영자') return true;
     if (clean.startsWith('게스트_') || clean.startsWith('유저_') || clean.startsWith('guest_') || clean.startsWith('user_') || clean.startsWith('임시_')) return true;
     return false;

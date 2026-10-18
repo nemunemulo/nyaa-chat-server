@@ -10,4 +10,4 @@
 #   /peer list
 #   /peer sync
 # ============================================================================
-https://nemulo.duckdns.org
+https://peer-server.example.com

@@ -264,7 +264,7 @@ users.set(SERVER_BOT.socketId, SERVER_BOT);
 
 // Root Server Operator Credentials
 const OPER_SECRET_FILE = path.join(DATA_DIR, 'oper_secret.key');
-let expectedOperId = (process.env.OPER_USER || 'nemuru').trim();
+let expectedOperId = (process.env.OPER_USER || 'admin').trim();
 let expectedOperPw = (process.env.OPER_PASS || '').trim();
 
 if (!expectedOperPw) {
@@ -298,25 +298,11 @@ try {
   console.error('Failed to load aioper_accounts.json:', e);
 }
 
-if (!AIOPER_ACCOUNTS['nemulo'] && process.env.AIOPER_NEMULO_PW) {
-  AIOPER_ACCOUNTS['nemulo'] = {
-    pw: process.env.AIOPER_NEMULO_PW,
-    defaultNick: '네무로',
-    name: '네무로 (AI 어시스턴트)'
-  };
-}
-if (!AIOPER_ACCOUNTS['nemu'] && process.env.AIOPER_NEMU_PW) {
-  AIOPER_ACCOUNTS['nemu'] = {
-    pw: process.env.AIOPER_NEMU_PW,
-    defaultNick: '네무',
-    name: '네무 (AI 어시스턴트)'
-  };
-}
-if (!AIOPER_ACCOUNTS['koko'] && process.env.AIOPER_KOKO_PW) {
-  AIOPER_ACCOUNTS['koko'] = {
-    pw: process.env.AIOPER_KOKO_PW,
-    defaultNick: 'koko',
-    name: 'koko (AI 어시스턴트)'
+if (!AIOPER_ACCOUNTS['bot'] && process.env.AIOPER_BOT_PW) {
+  AIOPER_ACCOUNTS['bot'] = {
+    pw: process.env.AIOPER_BOT_PW,
+    defaultNick: '냥봇',
+    name: '냥봇 (AI 어시스턴트)'
   };
 }
 
@@ -882,7 +868,7 @@ function buildWhoisBox(targetUser, requester) {
 
   let authLine = '';
   if (targetUser.isServerOper) {
-    authLine = ` │  인증유저: ${nick} 님은 nemuru 총괄 운영자로 로그인되었습니다.\n`;
+    authLine = ` │  인증유저: ${nick} 님은 총괄 운영자로 로그인되었습니다.\n`;
   } else if (targetUser.isAiOper) {
     authLine = ` │  인증유저: ${nick} 님은 AI 협업 운영자(${targetUser.aiOperId || 'aioper'})로 인증되었습니다. 🤖\n`;
   } else if (targetUser.isBot || targetUser.userId === BOT_ID) {
@@ -903,7 +889,7 @@ function buildWhoisBox(targetUser, requester) {
     ` │  사용자명: ${username}\n` +
     ` │  입실채널: ${channelsStr}\n` +
     authLine +
-    ` │  접속서버: *.tnemu.duckdns.org:3000/ * TNemu\n` +
+    ` │  접속서버: *:${PORT}/ * NyaaChat\n` +
     ` │  잠수시간: ${idleStr}\n` +
     ` │  접속시간: ${connectStr}\n` +
     ` └───────────────────────────━━`
@@ -939,7 +925,7 @@ if (ENABLE_WEB_CLIENT) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>nemulo</title>
+  <title>NyaaChat Server</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #f0f6fc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
     .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 36px 30px; max-width: 440px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
@@ -952,7 +938,7 @@ if (ENABLE_WEB_CLIENT) {
 <body>
   <div class="card">
     <div class="badge">Online</div>
-    <h2>nemulo</h2>
+    <h2>NyaaChat Server</h2>
     <p>서버가 정상 가동 중입니다.<br><br>채팅에 접속하시려면 <strong>전용 데스크톱 클라이언트(NyaaChat Client)</strong>를 실행해 주세요.</p>
     <div class="footer">NyaaChat Core v1.0.0 · Native Client Exclusive Mode</div>
   </div>
@@ -3050,7 +3036,7 @@ io.on('connection', (socket) => {
         id: `sys_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         roomId: user.currentRoom || '#자유대화',
         type: 'system',
-        content: `* [시스템] ${user.nickname}님이 서버 총괄 운영자(nemuru)로 인증되었습니다. 👑`,
+        content: `* [시스템] ${user.nickname}님이 서버 총괄 운영자(Server Operator)로 인증되었습니다. 👑`,
         timestamp: Date.now()
       };
       socket.emit('new_message', opAnnounce);

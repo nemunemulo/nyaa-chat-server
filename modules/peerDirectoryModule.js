@@ -167,7 +167,7 @@ function setupPeerDirectoryModule({
     fs.mkdirSync(MODULES_DIR, { recursive: true });
   }
 
-  // Auto-detect domain from /etc/caddy/Caddyfile or ~/duckdns/duck.sh if not explicitly set
+  // Resolve default server identity from environment or fallback to localhost:3000
   function detectDefaultServerIdentity() {
     if (process.env.SERVER_URL) {
       const envUrl = normalizeServerUrl(process.env.SERVER_URL);
@@ -176,34 +176,9 @@ function setupPeerDirectoryModule({
         serverUrl: envUrl
       };
     }
-    try {
-      const candidates = [
-        '/etc/caddy/Caddyfile',
-        path.join(process.env.HOME || '/home/ubuntu', 'duckdns', 'duck.sh')
-      ];
-      for (const file of candidates) {
-        if (fs.existsSync(file)) {
-          const content = fs.readFileSync(file, 'utf8');
-          if (/tnemu\.duckdns\.org/i.test(content) || /domains=tnemu\b/i.test(content)) {
-            return {
-              serverName: process.env.SERVER_NAME || 'B서버 (tnemu)',
-              serverUrl: 'https://tnemu.duckdns.org'
-            };
-          }
-          if (/nemulo\.duckdns\.org/i.test(content) || /domains=nemulo\b/i.test(content)) {
-            return {
-              serverName: process.env.SERVER_NAME || 'A서버 (nemulo)',
-              serverUrl: 'https://nemulo.duckdns.org'
-            };
-          }
-        }
-      }
-    } catch (e) {
-      // ignore detection error
-    }
     return {
-      serverName: process.env.SERVER_NAME || 'A서버 (nemulo)',
-      serverUrl: 'https://nemulo.duckdns.org'
+      serverName: process.env.SERVER_NAME || 'Nyaa Chat Server',
+      serverUrl: 'http://localhost:3000'
     };
   }
 
@@ -258,13 +233,11 @@ function setupPeerDirectoryModule({
           '# 신뢰할 수 있는 이웃 서버(또는 스테이터스 서버)의 주소를 한 줄에 하나씩 적어주세요.',
           '# 화이트리스트에 등록된 서버끼리만 서버 상태 및 공개 채널 리스트를 주기적으로 교류합니다.',
           '# 채팅창에서 관리자(/oper) 로그인 후 아래 명령어로도 즉시 추가/삭제할 수 있습니다:',
-          '#   /peer add https://tnemu.duckdns.org',
-          '#   /peer del https://tnemu.duckdns.org',
+          '#   /peer add https://peer-server.example.com',
+          '#   /peer del https://peer-server.example.com',
           '#   /peer list',
           '#   /peer sync',
           '# ============================================================================',
-          'https://nemulo.duckdns.org',
-          'https://tnemu.duckdns.org',
           ''
         ].join('\r\n');
         safeAtomicWriteFileSync(PEERS_WHITELIST_FILE, defaultTxt, 'utf8');
