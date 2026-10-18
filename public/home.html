@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>nemulo</title>
-  <meta name="description" content="nemulo personal hub and project directory.">
+  <title>Projects &amp; Links</title>
+  <meta name="description" content="Personal hub and project directory.">
   <style>
     :root {
       --bg: #0d1117;
@@ -73,22 +73,15 @@
     header {
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 36px;
-      padding-bottom: 24px;
+      align-items: center;
+      margin-bottom: 32px;
+      padding-bottom: 20px;
       border-bottom: 1px solid var(--border);
     }
 
-    .profile-info h1 {
-      font-size: 28px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--text-main);
-      margin-bottom: 4px;
-    }
-
     .profile-info p {
-      font-size: 14px;
+      font-size: 15px;
+      font-weight: 500;
       color: var(--text-muted);
     }
 
@@ -262,22 +255,13 @@
     }
 
 
-    footer {
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid var(--border);
-      text-align: center;
-      font-size: 12px;
-      color: var(--text-dim);
-    }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <div class="profile-info">
-        <h1>nemulo</h1>
-        <p>Developer &amp; Creator · Projects &amp; Links</p>
+        <p>Developer · Projects &amp; Links</p>
       </div>
       <button id="themeToggle" class="theme-toggle-btn" aria-label="Toggle Theme" title="테마 변경">
         <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -375,9 +359,6 @@
       </div>
     </section>
 
-    <footer>
-      &copy; 2026 nemulo
-    </footer>
   </div>
 
   <script>
