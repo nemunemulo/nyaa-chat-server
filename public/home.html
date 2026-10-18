@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nemulo</title>
+  <meta name="description" content="nemulo personal hub and project directory.">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-hover: #1c2128;
+      --border: #30363d;
+      --border-hover: #58a6ff;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+      --text-dim: #6e7681;
+      --accent: #58a6ff;
+      --badge-bg: rgba(88, 166, 255, 0.1);
+      --badge-text: #58a6ff;
+      --badge-border: rgba(88, 166, 255, 0.2);
+      --status-bg: rgba(63, 185, 80, 0.1);
+      --status-text: #3fb950;
+      --status-border: rgba(63, 185, 80, 0.25);
+      --btn-bg: #21262d;
+      --btn-hover: #30363d;
+    }
+
+    [data-theme="light"] {
+      --bg: #f6f8fa;
+      --card-bg: #ffffff;
+      --card-hover: #f3f4f6;
+      --border: #d0d7de;
+      --border-hover: #0969da;
+      --text-main: #1f2328;
+      --text-muted: #656d76;
+      --text-dim: #8c959f;
+      --accent: #0969da;
+      --badge-bg: rgba(9, 105, 218, 0.08);
+      --badge-text: #0969da;
+      --badge-border: rgba(9, 105, 218, 0.2);
+      --status-bg: rgba(26, 127, 55, 0.08);
+      --status-text: #1a7f37;
+      --status-border: rgba(26, 127, 55, 0.25);
+      --btn-bg: #eaeef2;
+      --btn-hover: #d0d7de;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 20px;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 680px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 36px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .profile-info h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+      margin-bottom: 4px;
+    }
+
+    .profile-info p {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .theme-toggle-btn {
+      background: var(--btn-bg);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .theme-toggle-btn:hover {
+      background: var(--btn-hover);
+      border-color: var(--text-muted);
+    }
+
+    .theme-toggle-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .theme-toggle-btn .sun-icon {
+      display: block;
+    }
+
+    .theme-toggle-btn .moon-icon {
+      display: none;
+    }
+
+    [data-theme="light"] .theme-toggle-btn .sun-icon {
+      display: none;
+    }
+
+    [data-theme="light"] .theme-toggle-btn .moon-icon {
+      display: block;
+    }
+
+    section {
+      margin-bottom: 36px;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      margin-bottom: 14px;
+    }
+
+    .social-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .social-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-main);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .social-card:hover {
+      border-color: var(--border-hover);
+      background: var(--card-hover);
+      transform: translateY(-1px);
+    }
+
+    .social-card svg {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      color: var(--text-muted);
+      transition: color 0.15s ease;
+    }
+
+    .social-card:hover svg {
+      color: var(--accent);
+    }
+
+    .projects-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .project-card {
+      display: block;
+      padding: 16px 18px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-main);
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+
+    .project-card:hover {
+      border-color: var(--border-hover);
+      background: var(--card-hover);
+      transform: translateY(-1px);
+    }
+
+    .project-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .project-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .project-tag {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 8px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      border: 1px solid var(--badge-border);
+      border-radius: 4px;
+    }
+
+    .project-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .project-more {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      background: var(--card-bg);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .project-more:hover {
+      border-color: var(--border-hover);
+      color: var(--accent);
+      background: var(--card-hover);
+    }
+
+    .status-card {
+      padding: 16px 18px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--status-text);
+    }
+
+    .status-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--status-text);
+    }
+
+    .status-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    footer {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="profile-info">
+        <h1>nemulo</h1>
+        <p>Developer &amp; Creator · Projects &amp; Links</p>
+      </div>
+      <button id="themeToggle" class="theme-toggle-btn" aria-label="Toggle Theme" title="테마 변경">
+        <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </button>
+    </header>
+
+    <section>
+      <div class="section-title">Projects</div>
+      <div class="projects-list">
+        <a class="project-card" href="https://github.com/nemunemulo/nyaa-chat-client" target="_blank" rel="noopener noreferrer">
+          <div class="project-header">
+            <span class="project-name">nyaa-chat-client</span>
+            <span class="project-tag">Windows · C#</span>
+          </div>
+          <p class="project-desc">Lightweight real-time chat client (.NET Framework 4.8). Single standalone binary supporting Socket.IO v4 and RFC 1459/2812 IRC protocols.</p>
+        </a>
+
+        <a class="project-card" href="https://github.com/nemunemulo/nyaa-chat-server" target="_blank" rel="noopener noreferrer">
+          <div class="project-header">
+            <span class="project-name">nyaa-chat-server</span>
+            <span class="project-tag">Node.js · Socket.IO</span>
+          </div>
+          <p class="project-desc">Autonomous real-time chat server with peer directory discovery, rate limiting, and zero-database file persistence.</p>
+        </a>
+
+        <a class="project-more" href="https://github.com/nemunemulo?tab=repositories" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+          </svg>
+          <span>View all repositories on GitHub</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </a>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">Channels &amp; Social</div>
+      <div class="social-grid">
+        <a class="social-card" href="https://github.com/nemunemulo" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+          </svg>
+          <span>GitHub</span>
+        </a>
+
+        <a class="social-card" href="https://www.youtube.com/@nemulo_nemu" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+          </svg>
+          <span>YouTube</span>
+        </a>
+
+        <a class="social-card" href="https://www.twitch.tv/nemunemulo" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+          </svg>
+          <span>Twitch</span>
+        </a>
+
+        <a class="social-card" href="https://x.com/nemunemulo" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+          <span>X (Twitter)</span>
+        </a>
+
+        <a class="social-card" href="https://www.instagram.com/nemunemulo/" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+          </svg>
+          <span>Instagram</span>
+        </a>
+
+        <a class="social-card" href="https://www.tiktok.com/@nemunemulo" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.24 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>
+          </svg>
+          <span>TikTok</span>
+        </a>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">Service Status</div>
+      <div class="status-card">
+        <div class="status-header">
+          <span class="status-indicator"></span>
+          <span class="status-title">NyaaChat Server Online</span>
+        </div>
+        <p class="status-desc">
+          서버가 정상 가동 중입니다. 웹 브라우저 인터페이스는 비활성화되어 있으므로, 채팅 접속을 원하시는 경우 <strong>NyaaChat 데스크톱 클라이언트</strong>를 이용해 주세요.
+        </p>
+      </div>
+    </section>
+
+    <footer>
+      &copy; 2026 nemulo · Hosted on nemulo VPS
+    </footer>
+  </div>
+
+  <script>
+    (function() {
+      const toggleBtn = document.getElementById('themeToggle');
+      const savedTheme = localStorage.getItem('theme');
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+      if (savedTheme) {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+      } else if (!prefersDark) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+
+      toggleBtn.addEventListener('click', function() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', nextTheme);
+        localStorage.setItem('theme', nextTheme);
+      });
+    })();
+  </script>
+</body>
+</html>

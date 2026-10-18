@@ -928,28 +928,32 @@ app.use(express.json());
 if (ENABLE_WEB_CLIENT) {
   app.use(express.static(path.join(__dirname, 'public')));
 } else {
-  // Web client is disabled by default: provide informational page for browser visitors
-  app.get('/', (req, res) => {
+  // Web client is disabled by default: serve personal portal / homepage for browser visitors
+  app.get(['/', '/home'], (req, res) => {
+    const homeFile = path.join(__dirname, 'public', 'home.html');
+    if (fs.existsSync(homeFile)) {
+      return res.sendFile(homeFile);
+    }
     res.status(200).send(`<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NyaaChat Server</title>
+  <title>nemulo</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 36px 30px; max-width: 440px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
-    h2 { margin: 0 0 12px; font-size: 22px; color: #38bdf8; }
-    p { margin: 0 0 18px; color: #94a3b8; font-size: 14px; line-height: 1.6; }
-    .badge { display: inline-block; padding: 4px 10px; font-size: 12px; font-weight: 600; border-radius: 4px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; margin-bottom: 16px; }
-    .footer { font-size: 12px; color: #64748b; margin-top: 24px; border-top: 1px solid #334155; padding-top: 16px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #f0f6fc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 36px 30px; max-width: 440px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+    h2 { margin: 0 0 12px; font-size: 22px; color: #58a6ff; }
+    p { margin: 0 0 18px; color: #8b949e; font-size: 14px; line-height: 1.6; }
+    .badge { display: inline-block; padding: 4px 10px; font-size: 12px; font-weight: 600; border-radius: 4px; background: rgba(88, 166, 255, 0.15); color: #58a6ff; margin-bottom: 16px; }
+    .footer { font-size: 12px; color: #6e7681; margin-top: 24px; border-top: 1px solid #30363d; padding-top: 16px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="badge">서버 정상 가동 중 (Online)</div>
-    <h2>🐾 NyaaChat Server</h2>
-    <p>본 서버의 웹 브라우저 채팅 인터페이스는 비활성화되어 있습니다.<br><br>채팅에 접속하시려면 <strong>전용 데스크톱 클라이언트(NyaaChat Client)</strong>를 실행해 주세요.</p>
+    <div class="badge">Online</div>
+    <h2>nemulo</h2>
+    <p>서버가 정상 가동 중입니다.<br><br>채팅에 접속하시려면 <strong>전용 데스크톱 클라이언트(NyaaChat Client)</strong>를 실행해 주세요.</p>
     <div class="footer">NyaaChat Core v1.0.0 · Native Client Exclusive Mode</div>
   </div>
 </body>
